@@ -150,6 +150,52 @@ function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t, transmitance)
     return data_mult
 end
 
+
+
+
+"""
+design a signal filter that is flexable enough to be either low-pass or band-pass filter
+the resulting filter can be called as filt(digital_filter, signal)
+
+Parameters
+----------
+sampling_rate: float
+    The sampling rate of the signal
+cutoff_freq: float or Tuple
+the cut-off frequency or frequencies of the filter
+filter_order: int
+    The order of the filter
+filter_type: str
+the type of filter: either lowpass or bandpass
+
+Returns
+-------
+digital_filter: digitalfilter
+    The digital filter object
+"""
+function design_filter(sampling_rate, cutoff_freq, filter_order, filter_type)
+    # Calculate the normalized cutoff frequency
+    cutoff_freq_norm = cutoff_freq / (sampling_rate / 2)
+    
+    # Design the filter
+    if filter_type == "lowpass"
+        responsetype = Lowpass(cutoff_freq; fs=sampling_rate)
+        designmethod = Butterworth(filter_order)
+    
+    elseif filter_type == "bandpass"
+        responsetype = Bandpass(cutoff_freq; fs=sampling_rate)
+        designmethod = Butterworth(filter_order)
+    
+    else
+        error("Filter type not supported")
+    end
+
+    # Instantiate the digital filter
+    digital_filter = digitalfilter(responsetype, designmethod)
+    
+    return digital_filter
+end
+
 ### read the dataset
 #laser_data = "data/lab_data_02-23/laser/"
 
