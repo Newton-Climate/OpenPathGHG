@@ -30,11 +30,16 @@ Instrument contains the parameters required to perform the simulation of the ins
 - `mod_freq::FT`: (Hz) The frequency of the modulation.
 - `num_samples::Int`: Number of samples in the modulation.
 - `pathlength::FT`: (cm) The pathlength of the instrument.
+sampling_rate::FT`:`: (Hz) The sampling rate of the instrument
 
 ===============================
 
 # Example
-instr = Instrument((5000.0, 5100.0), 1.0, 10.0, 0.02, 0.01, 10.0, 100, 1.0)
+instrument = Instrument(wavenumber_range=wavenumber_range, mod_freq=mod_freq,
+mod_amplitude=mod_amplitude, slow_sweep_period=slow_sweep_period,
+num_samples=num_samples, pathlength=pathlength,
+avg_laser_intensity=I0, tuning_rate=tuning_rate, sampling_rate=sampling_rate
+)
 """
 Base.@kwdef struct Instrument{FT}
     wavenumber_range::Tuple{FT, FT}
@@ -45,7 +50,9 @@ Base.@kwdef struct Instrument{FT}
     mod_freq::FT
     num_samples::Int
     pathlength::FT
+    sampling_rate::FT
 end
+
 
 """
 convert the amplitude of the fast modulation from nanometers to wave-numbers (1/cm)
@@ -230,11 +237,8 @@ function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
     # Calculate the intensity over time
     ω = 2π * instrument.mod_freq
     light_intensity = I0 * (1 .+ i0 * cos.(ω * t .+ psi1) .+ i2 * cos.(2 * ω * t .+ psi2))
-    # return only the light corresponding 
-    # to the up-sweep
-    n = length(transmitance)
-    
-    return light_intensity[1:n]
+
+    return light_intensity
 end
 
 
@@ -315,4 +319,40 @@ function simulate_lockin(direct_signal::AbstractArray,
     # lockin_signal = sqrt.(lockin_x.^2 + lockin_y.^2)
 
     return lockin_y
+end
+
+
+function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1, psi2, t)
+    # Generate the spectral grid
+    ν_grid = spectra["CH4"].grid
+    instrument_grid = generate_spectral_grid(instrument)
+    
+    # Calculate transmission
+    transmitance = SpectralFits.calculate_transmission(x, spectra,
+    instrument.pathlength, length(ν_grid),
+    p=p, T=T)
+    
+    # Interpolate from the spectroscopy model to the instrument grid
+    transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
+    
+    # Scale the laser power by the transmitance to get direct signal
+    light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)[1:length(transmitance)]
+    direct_signal = light_intensity .* transmitance
+    
+    # Filter the signal and simulate lock-in amplifier
+    # Filter 2-F signal
+    # Keep ±20% margin of 2-F signal
+    bandpass_filter = design_filter(instrument.sampling_rate, (1.8 * instrument.mod_freq, 2.2 * instrument.mod_freq), 6, "bandpass")
+    signal_2f = filt(bandpass_filter, direct_signal)
+    
+    # Create the 2-F signal from the lock-in amplifier
+    harmonic = 2
+    gain = 1.0
+    lockin_2f = simulate_lockin(signal_2f, instrument, gain, harmonic)
+    
+    # Filter out high-frequency variations to highlight absorption line-shape
+    lowpass_filter = design_filter(instrument.sampling_rate, 100.0, 5, "lowpass")
+    lockin_2f_filtered = filt(lowpass_filter, lockin_2f)
+    
+    return lockin_2f_filtered
 end

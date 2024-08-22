@@ -93,10 +93,16 @@ psi2 = 0 # ignore phase shift rn
 instrument = Instrument(wavenumber_range=wavenumber_range, mod_freq=mod_freq,
 mod_amplitude=mod_amplitude, slow_sweep_period=slow_sweep_period,
 num_samples=num_samples, pathlength=pathlength,
-avg_laser_intensity=I0, tuning_rate=tuning_rate
+avg_laser_intensity=I0, tuning_rate=tuning_rate,
+sampling_rate=sampling_rate
 )
 
 ## run the instrument simulation functions
+# test the instrument model
+model_test = sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, 
+# test each function in thei2, psi1, psi2, t)
+
+## test each function in the model
 # generate the spectral grid
 instrument_grid = generate_spectral_grid(instrument)
 # calculate transmission
@@ -106,7 +112,7 @@ transmitance = SpectralFits.calculate_transmission(x, spectra,
 # interpolate from the spectroscopy model to the instrument grid
 transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
 # scale the laser power by the transmitance to get direct signal
-light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
+light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)[1:length(instrument_grid)]
 direct_signal = light_intensity .* transmitance
 
 # filter the signal and simulate lock-in amplifier
