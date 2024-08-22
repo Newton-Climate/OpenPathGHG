@@ -263,7 +263,7 @@ digital_filter: digitalfilter
     The digital filter object
 """
 function design_filter(sampling_rate::Real,
-    cutoff_freq::Real,
+    cutoff_freq::Union{Real, Tuple{Real,Real}},
     filter_order::Int,
     filter_type::String)
 
