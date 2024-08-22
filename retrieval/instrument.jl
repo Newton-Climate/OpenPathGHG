@@ -226,7 +226,7 @@ Modulations in light-intensity are due to modulation of the laser current.
 # Returns:
 - `light_intensity`: intensity of the light over time due to laser modulation
 """
-function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t, transmitance)
+function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
     # Calculate the intensity over time
     ω = 2π * instrument.mod_freq
     light_intensity = I0 * (1 .+ i0 * cos.(ω * t .+ psi1) .+ i2 * cos.(2 * ω * t .+ psi2))

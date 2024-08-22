@@ -1,6 +1,25 @@
+### This script runs the functions to simulate the open-path Instrument
+# including the laser modulation, the slow sweep, the fast sweep,
+# and the lock-in amplifier
+# ====
+## Notes for modeling the instrument measurements
+    # generate the wavenumber grid from fast and slow sweepsd 
+    # generate the intensity modulation of the laser light over time
+    # calculate the absorbance of the laser as a result of gas absorbance
+    # apply band-pass filter to isolate the 2-F signal
+    # simulate the lock-in by multiplying by 2F signal
+    # apply a low-pass filter to isolate the absorption line-shape
+    # result should be the second derivative of absorption
+    # ====
+    # Author: Dr. Newton Nguyen 
+    # All Rights Reserved
+    # ====
+
+    # Load the instrument functions
 include("instrument.jl")
-using SpectralFits, vSmartMOM.Absorption, FFTW
-using Plots
+# load packages for spectral calculations
+using SpectralFits, vSmartMOM.Absorption
+using Plots, FFTW
 
 ### read spectral parameters
 # Directory and data setup
@@ -11,7 +30,7 @@ CH₄_C13 = get_molecule_info("13CH4", joinpath(datadir, "hit16_13CH4.par"), 6, 
 H2O = get_molecule_info("H2O", joinpath(datadir, "hit20_H2O.par"), 1, 1, ν_grid)
 spectra = setup_molecules([CH₄, H2O, CH₄_C13])
 
-## define the measurement conditions
+## define the atmospheric measurement conditions
 # pressure (HPa) and temperature (K)
 p, T = 1e3, 290
 # pathlength of laser in cm
@@ -26,6 +45,7 @@ x = Dict("CH4" => 2000e-9 * vcd,
 "13CH4" => 2000e-9 * vcd)
 
 ### read the dataset
+# Ignore for now until retrieval
 #laser_data = "data/lab_data_02-23/laser/"
 #df = CSV.read(laser_data*"/ch4_meas_0_1.txt", DataFrame, delim=',', header=["cell", "room", "lockin"])
 # filter out the rising parts of the wavelength sweep
@@ -36,14 +56,14 @@ x = Dict("CH4" => 2000e-9 * vcd,
 ### Define the instrument parameters
 # laser current in miliamps
 # max and min laser power in sweep
-I_end = 45.1
-I_start = 30.1
+I_start, I_end = 30.1, 45.1
 # reference current and wavelength from lab measurements
 I1, λ1 = 36.6, 1653.678
 I2, λ2 = 37.6, 1653.707
-# define the wavenumber range of the instrument
+# extrapolate the wavenumber range of the instrument from lab reference-points
 λ_start, λ_end= calc_wavenumber_range(I1, I2, λ1, λ2, (I_start, I_end))
 # convert nanometers to wave-numbers (1/cm) of lambda_start:lambda_end
+# Note: switch start and stop is intentional
 min_wavenumber = 1e7 / λ_end
 max_wavenumber = 1e7 / λ_start
 wavenumber_range = (min_wavenumber, max_wavenumber)
@@ -86,7 +106,7 @@ transmitance = SpectralFits.calculate_transmission(x, spectra,
 # interpolate from the spectroscopy model to the instrument grid
 transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
 # scale the laser power by the transmitance to get direct signal
-light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t, 1e3)
+light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
 direct_signal = light_intensity .* transmitance
 
 # filter the signal and simulate lock-in amplifier
