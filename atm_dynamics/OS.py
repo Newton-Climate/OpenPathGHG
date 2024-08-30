@@ -31,21 +31,6 @@ def gen_gauss_beam(nx, ny, y_range, x_range, W_0, A_0, wavelength):
     E = A_0 * np.exp(-(X**2 + Y**2) / W_0**2)
     return E
 
-def gen_gauss_long(nx, ny, y_range, x_range, W_0, A_0, L, z, wavelength):
-    kappa = 2*np.pi/wavelength
-    beam_div = 5e-4
-    F_0 = 1.654e-6 / (2 * beam_div)
-    Theta_0 = 1-(L/F_0)
-    Amps_0 = 2*L/(kappa*W_0**2)
-    F = (F_0 * (Theta_0**2 + Amps_0**2) * (Theta_0 - 1)) / (Theta_0**2 + Amps_0**2 - Theta_0)
-    W = W_0 * np.sqrt(Theta_0**2 + Amps_0**2)
-    x = np.linspace(x_range[0], x_range[1], nx)
-    y = np.linspace(y_range[0], y_range[1], ny)
-    X, Y = np.meshgrid(x, y)
-    r = np.sqrt(X**2 + Y**2)
-    E = (A_0/np.sqrt(Theta_0**2 + Amps_0**2))*np.exp(-r**2 / W**2)*np.exp(1j*kappa*L - 1j*math.atan(Amps_0/Theta_0) - 1j * kappa * r**2/(2*F))
-    return E
-
 def fresnel_prop(E, Lx, wavelength, nx, z):
     k = 2 * np.pi / wavelength
     dx = Lx / nx
@@ -60,8 +45,7 @@ def fresnel_prop(E, Lx, wavelength, nx, z):
     return u2 
 
 def gen_phase_screen(turb_model, C2n, L0, l0, nx, ny, p_filter):
-    # k = 2 * np.pi /np.random.normal(l0,L0)
-    k = 2 * np.pi /l0
+    k = 2 * np.pi /np.random.uniform(l0,L0)
     if turb_model == "kolmogorov":
         PSD = kolmogorov_psd(C2n, L0, l0, k)
     elif turb_model == "vonKarman":
@@ -72,10 +56,11 @@ def gen_phase_screen(turb_model, C2n, L0, l0, nx, ny, p_filter):
         PSD = mod_atm_psd(C2n, L0, l0, k)
     else:
         raise ValueError("Invalid turbulence model")
-        
+
     a_r = np.random.normal(loc=0.0, scale=1.0, size=(nx, ny))
     phase_field = a_r * np.sqrt(PSD)
     phase_space = np.fft.ifft2(phase_field)
+
     filt_ps = phase_space
     plt.figure()
     plt.figure(figsize=(8, 7))
@@ -86,7 +71,7 @@ def gen_phase_screen(turb_model, C2n, L0, l0, nx, ny, p_filter):
     plt.ylabel('Ly [m]')
     plt.xticks(ticks=tick_locations, labels=tick_labels)
     plt.yticks(ticks=tick_locations, labels=tick_labels)
-    plt.savefig(f'/Users/kmagno/Documents/OS_figs/Phase_Screen.png', format='png')
+    plt.savefig(f'Phase_Screen.png', format='png')
     # Show the plot
     plt.show()
     plt.close()
@@ -137,12 +122,11 @@ def plot3d_phase(phase_screen):
     cbar = plt.colorbar(surf,orientation='horizontal', pad=0.2)
     plt.xticks(ticks=tick_locations, labels=tick_labels)
     plt.yticks(ticks=tick_locations, labels=tick_labels)
-    plt.savefig(f'/Users/kmagno/Documents/OS_figs/Phase_Screen.png', format='png')
+    plt.tight_layout()
+    plt.savefig(f'Phase_Screen_3.png', format='png')
     # Show the plot
     plt.show()
     plt.close()
-    
-    
     
     
     
@@ -153,13 +137,11 @@ from matplotlib.pyplot import figure
 import math
 import csv
 
-nx = 256
-ny = 256
+nx = 512
+ny = 512
 Lx = 0.005
 dx = Lx/nx
 dy = Lx/ny
-#x_range = [-Lx, Lx]
-#y_range = [-Lx, Lx]
 x_range = [-Lx, Lx]
 y_range = [-Lx, Lx]
 # Define the tick locations and labels
@@ -169,30 +151,27 @@ tick_labels = np.linspace(0, Lx, num_ticks)
 
 file_names = []
 max_P = 0.07
-W_0 = 3e-3#5e-3
+W_0 = 3e-3
 I_max = max_P/(np.pi*(W_0/2)**2)
 c = 3e8
 eps_0 = 8.85e-12
-A_0 = np.sqrt(2*I_max/(c*eps_0))
+A_0 = np.sqrt(2*np.pi/(c*eps_0))
 
-wavelength = 6.33e-7
-#1.654e-6
-C2n = 10e-15
+wavelength = 1.654e-6
+C2n = 10e-16
 L0 = 10
 l0 = 0.1
-turb_model = "vonKarman"
+turb_model = "modAtm"
 p_filter = 2.36
 I_trend = []
 phase_screen = gen_phase_screen(turb_model, C2n, L0, l0, nx, ny, p_filter)
 plt.figure()
+ps_plot = plot3d_phase(phase_screen)
 
 
 E_0 = np.array(gen_gauss_beam(nx, ny, y_range, x_range, W_0, A_0, wavelength))
-# print('I E_0 = ')
-# print(np.mean(np.real(abs(E_0*np.conj(E_0)))))
-#I_trend.append(np.mean(np.real(abs(E_0*np.conj(E_0)))))
+
 Irr_E0 = irr_calc(E_0,c,eps_0)
-print('OG = ' + str(np.max(Irr_E0)))
 plt.figure()
 plt.figure(figsize=(8, 7))
 plt.imshow(Irr_E0, cmap='gist_stern')
@@ -202,12 +181,12 @@ plt.xlabel('Lx [m]')
 plt.ylabel('Ly [m]')
 plt.xticks(ticks=tick_locations, labels=tick_labels)
 plt.yticks(ticks=tick_locations, labels=tick_labels)
-plt.savefig(f'/Users/kmagno/Documents/OS_figs/Initial_Irr.png', format='png')
+plt.savefig(f'Initial_Irr_3.png', format='png')
 plt.show()
 plt.close() 
 E_f = E_0
-tot_Z = 10 # m
-d_ps = 1e-2 # m, distance between each phase screen
+tot_Z = 20 # m
+d_ps = 1e-3 # m, distance between each phase screen
 num_screens = math.floor(tot_Z/d_ps)
 print('num_screens = ' + str(num_screens))
 ps_num = 0
@@ -227,33 +206,34 @@ while ps_num < num_screens:
         plt.xlabel('Lx [m]')
         plt.ylabel('Ly [m]')
         plt.title('Irradiance [W/m2]\n' + 'z = ' + str(d_ps * ps_num) + 'm\n' + str(ps_num) + ' ' + str(turb_model) + ' Phase Screens')
-        file_name = f'/Users/kmagno/Documents/OS_figs/Irr_{ps_num}.png'
+        file_name = f'Irr_2_{ps_num}.png'
         file_names.append(file_name)
         plt.savefig(file_name, format='png')
         plt.show()
         plt.close()  # Close the figure to free up memory
-        # save array
-        filename = f'/Users/kmagno/Documents/OS_csv/E_{ps_num}.csv'
-        # Write the data to the CSV file
-        with open(filename, 'w', newline='') as csvfile:
-            csv_writer = csv.writer(csvfile)
-            csv_writer.writerows(np.array(nu))
+        # save data
+        # filename = f'E_2_{ps_num}.csv'
+        # # Write the data to the CSV file
+        # with open(filename, 'w', newline='') as csvfile:
+        #     csv_writer = csv.writer(csvfile)
+        #     csv_writer.writerows(np.array(nu))
     E_f = nu
-R_diam = 0.0025 # [m]
+    
+R_diam = 0.05 # [m]
 mask = np.zeros((nx, ny))
 mask = R_x(R_diam,dx,nx)
 Irr_fin = irr_calc(nu,c,eps_0)
 I_mask = Irr_fin * mask
 plt.figure()
 plt.figure(figsize=(8, 7))
-plt.imshow((I_mask), cmap='gist_stern',vmin=0, vmax=3.5)
+plt.imshow((I_mask), cmap='gist_stern')
 plt.colorbar()
 plt.xticks(ticks=tick_locations, labels=tick_labels)
 plt.yticks(ticks=tick_locations, labels=tick_labels)
 plt.xlabel('Lx [m]')
 plt.ylabel('Ly [m]')
 plt.title('Irradiance [W/m2] at Receiver \n' + 'R Area = ' + str(round(np.pi*(R_diam/2)**2,5)) + 'm^2\n' + 'z = ' + str(d_ps * ps_num) + 'm\n' + str(ps_num) + ' ' + str(turb_model) + ' Phase Screens')
-plt.savefig(f'/Users/kmagno/Documents/OS_figs/FINAL.png', format='png')
+plt.savefig(f'FINAL_2.png', format='png')
 plt.show()
 plt.close()  # Close the figure to free up memory
 #tot_P = np.mean(np.mean(I_mask))/(np.pi*(R_diam/2)**2)
@@ -269,7 +249,7 @@ from PIL import Image
 images = [Image.open(file_name) for file_name in file_names]
 
 # # Create the GIF
-gif_file_name = "animation_cn2_15.gif"
-images[0].save(gif_file_name, save_all=True, append_images=images[1:], duration=5, loop=0)
+gif_file_name = "animation_1000_C2N16.gif"
+images[0].save(gif_file_name, save_all=True, append_images=images[1:], duration=100, loop=1)
 
 
