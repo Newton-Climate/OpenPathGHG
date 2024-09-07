@@ -137,17 +137,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == '__main__':
-    try:
-        serialNoYaw = "27006315"
-        serialNoTilt = "27006283"
-        deviationVal = 0.1
+    # try:
+    # serialNoYaw = "27006315"
+    # serialNoTilt = "27006283"
+    serialNoYaw = "27250209"
+    serialNoTilt = "27250140"
+    deviationVal = 0.1
 
-        with kdc_control.MotorApplication(serialNoYaw, serialNoTilt, deviationVal) as m:
-            app = QtWidgets.QApplication(m, sys.argv)
-            w = MainWindow()
-            app.exec()
-            # m.plotField(1)
+    with kdc_control.MotorApplication(serialNoYaw, serialNoTilt, deviationVal) as m:
+        app = QtWidgets.QApplication(m, sys.argv)
+        w = MainWindow()
+        app.exec()
+        # m.plotField(1)
 
-    except Exception as e:
-        print("ERROR! ALERT!")
-        print(e)
+    # except Exception as e:
+    #     print("ERROR! ALERT!")
+    #     print(e)
