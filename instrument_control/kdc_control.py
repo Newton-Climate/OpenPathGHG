@@ -10,6 +10,18 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 import csv
+import app
+
+import random
+import matplotlib
+import time
+matplotlib.use('QtAgg')
+
+from PyQt6 import QtCore, QtWidgets
+from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QPushButton
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 dwf = ctypes.cdll.dwf
 
@@ -57,7 +69,7 @@ class MotorApplication:
         scope.trigger(self.device_data, enable=False, source=scope.trigger_source.analog, channel=1, level=0)
 
         print("scope set up")
-
+        self.window_revealed = False
         self.deviceYaw = Thorlabs.KinesisMotor(serialNoYaw)
         self.devicePitch = Thorlabs.KinesisMotor(serialNoPitch)
         self.yawBoundary = yawBoundary
@@ -78,44 +90,49 @@ class MotorApplication:
         # self.devicePitch.wait_for_home()
         # print("done homing")
 
-        plt.ion()
-        print("ion started")
-        self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2)
+
+        # self.application = QtWidgets.QApplication(m, sys.argv)
+        # self.w = app.MainWindow()
+        # self.application.exec()
+
+        self.nyq_freq = data.sampling_frequency/2
+        # plt.ion()
+        # print("ion started")
+        # self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2)
         buffer = scope.record(self.device_data, channel=1)
         print(f"recorded, len {len(buffer)}")
         self.total_samples = len(buffer)
-        nyq_freq = data.sampling_frequency/2
-        target_freq = 9e03
-        self.freq_range = np.linspace(0, nyq_freq, int(self.total_samples/2)+1)
-        self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
-        target_index = target_freq*len(self.freq_range)/nyq_freq
-        start_index = int(target_index*0.9)
-        end_index = int(target_index*1.1)
-        self.freq_range = self.freq_range[start_index:end_index]
-        self.spectrum = self.spectrum[start_index:end_index]
-        self.spec_graph = self.ax1.plot(self.freq_range, self.spectrum)[0]
-        self.yaw_locs = [self.deviceYaw.get_position()]*1000
-        self.pitch_locs = [self.devicePitch.get_position()]*1000
-        print(self.yaw_locs[0], self.pitch_locs[0])
-        print("graph 1 done")
-        self.ax2.set_xlim([self.yaw_locs[0] - self.yawBoundary, self.yaw_locs[0] + self.yawBoundary])
-        self.ax2.set_ylim([self.pitch_locs[0] - self.pitchBoundary, self.pitch_locs[0] + self.pitchBoundary])
-        self.loc_graph = self.ax2.plot(self.yaw_locs, self.pitch_locs)[0]
-        plt.show()
-        print("about to check spectrum")
-        self.currVal, self.freq_range, self.spectrum = self.checkSpectrum()
-        self.spec_graph.set_data(self.freq_range, self.spectrum)
-        self.ax1.draw_artist(self.ax1.patch)
-        self.ax1.draw_artist(self.spec_graph)
-        self.fig.canvas.update()
-        self.fig.canvas.flush_events()
 
+        self.freq_range = np.linspace(0, self.nyq_freq, int(self.total_samples/2)+1)
+        
+        self.target_freq = 9e03
+        self.target_index = self.target_freq*len(self.freq_range)/self.nyq_freq
+        self.start_index = int(self.target_index*0.9)
+        print(f'start index: {self.start_index}')
+        self.end_index = int(self.target_index*1.1)
+        print(f'end index: {self.end_index}')
+
+        
+        self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
+        self.freq_range = self.freq_range[self.start_index:self.end_index]
+        self.spectrum = self.spectrum[self.start_index:self.end_index]
+        
         self.currPositionYaw = self.deviceYaw.get_position()
         self.currPositionPitch = self.devicePitch.get_position()
+        self.yaw_locs = [self.currPositionYaw]
+        self.pitch_locs = [self.currPositionPitch]
+
+        self.currVal, self.spectrum = self.checkSpectrum()
+
         self.deviationVal = deviationVal
         self.keepingCentered = False
         print(self.deviceYaw.get_limit_switch_parameters())
             
+
+    def windowRevealed(self, window):
+        self.main_window = window
+        print(self.main_window)
+        self.window_revealed = True
 
     def recenterHome(self, newYaw, newPitch):
         self.deviceYaw.setup_limit_switch(sw_kind='ignore')
@@ -135,49 +152,44 @@ class MotorApplication:
         print("waiting")
         self.devicePitch.wait_move()
 
+    def getSpectrum(self):
+        buffer = scope.record(self.device_data, channel=1)
+        self.total_samples = len(buffer)
+        spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
+        # if self.window_revealed:
+        #     self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
+        return spectrum
+
     def checkSpectrum(self):
-        nyq_freq = data.sampling_frequency/2
-        freq_range = np.linspace(0, nyq_freq, int(self.total_samples/2)+1)
-        
-        target_freq = 9e03
-        target_index = target_freq*len(freq_range)/nyq_freq
-        start_index = int(target_index*0.9)
-        end_index = int(target_index*1.1)
+
         spectrums = []
         for _ in range(10):
-            buffer = scope.record(self.device_data, channel=1)
-            self.total_samples = len(buffer)
-            spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
-            self.spec_graph.set_ydata(spectrum[start_index:end_index])
-            self.ax1.draw_artist(self.ax1.patch)
-            self.ax1.draw_artist(self.spec_graph)
-            self.fig.canvas.update()
-            self.fig.canvas.flush_events()
+            # print("observed")
+            spectrum = self.getSpectrum()
             
             spectrums.append(spectrum)
         spectrums = np.array(spectrums)
         spectrum = np.mean(spectrums, axis=0)
-        noisy_spectrum = [*spectrum[:start_index], *spectrum[end_index:]]
+        noisy_spectrum = [*spectrum[:self.start_index], *spectrum[self.end_index:]]
         noise_level = np.mean(noisy_spectrum)
         denoised_spectrum = (spectrum - noise_level)
-        graph_spectrum = spectrum[start_index:end_index]
-        return np.max(denoised_spectrum[start_index:end_index]), freq_range[start_index:end_index], graph_spectrum
+        graph_spectrum = spectrum[self.start_index:self.end_index]
+        return np.max(denoised_spectrum[self.start_index:self.end_index]), graph_spectrum
 
 
     def checkVal(self):
-        currValReturn, _, _ = self.checkSpectrum()
+        currValReturn, _ = self.checkSpectrum()
         return currValReturn
 
-    def adjustBeams(self):
-        yawVal = self.adjustBeam(self.deviceYaw)
-        pitchVal = self.adjustBeam(self.devicePitch)
+    def adjustBeams(self, binFactor):
+        yawVal = self.adjustBeam(self.deviceYaw, binFactor)
+        pitchVal = self.adjustBeam(self.devicePitch, binFactor)
         return yawVal, pitchVal
 
-    def adjustBeam(self, device):
+    def adjustBeam(self, device, binFactor):
         self.currVal = self.checkVal(self.spec_graph)
         newVal = self.currVal
         goingForward = 1
-        binFactor = 1
         while newVal >= self.currVal:
             self.currVal = newVal
             self.safeMove(device, goingForward*binFactor)
@@ -256,7 +268,7 @@ class MotorApplication:
         print(f"moved back to {device.get_position()}")
         newVal = self.checkVal()
         print(f"new val: {newVal}")
-        if 0.9 > newVal/self.currVal or newVal/self.currVal > 1.1:
+        if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
             print("exception, your honor")
             raise Exception(f"motor hasn't returned sufficiently to origin going up, amplitude is now {newVal/self.currVal} of previous")
         self.currVal = newVal
@@ -268,7 +280,7 @@ class MotorApplication:
             offset_min += 1
         self.home(1000)
         newVal = self.checkVal()
-        if 0.9 < newVal/self.currVal < 1.1:
+        if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
             print("exception, your honor")
             raise Exception(f"motor hasn't returned sufficiently to origin going down, amplitude is now {newVal/self.currVal} of previous")
         print(offset_min*binFactor, offset_max*binFactor)
@@ -277,36 +289,33 @@ class MotorApplication:
     def getOrientationArray(self, minYaw, maxYaw, minPitch, maxPitch, binFactor):
         self.safeMove(self.deviceYaw, maxYaw)
         self.safeMove(self.devicePitch, maxPitch)
-        yawDiff = (minYaw + maxYaw)/binFactor
-        pitchDiff = (minPitch + maxPitch)/binFactor
+        yawDiff = int((minYaw + maxYaw)/binFactor)
+        pitchDiff = int((minPitch + maxPitch)/binFactor)
         amplitude_2d = np.ones((pitchDiff, yawDiff))
+        print(maxYaw, maxPitch, minYaw, minPitch)
         for i in range (pitchDiff):
             self.safeMove(self.devicePitch, -binFactor)
             for j in range(yawDiff):
                 self.safeMove(self.deviceYaw, -binFactor)
                 amplitude_2d[i, j] = self.checkVal()
+                print(i, j)
             self.safeMove(self.deviceYaw, yawDiff*binFactor)
         return amplitude_2d
 
     def safeMove(self, device, amount, velocity=79475.19421577454):
+        # print("starting move")
         device.move_by(amount)
         device.wait_move()
+        # print("ending move")
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
         self.yaw_locs.append(yaw_loc)
         self.pitch_locs.append(pitch_loc)
-        full_yaw = self.yaw_locs + [self.yaw_locs[-1]]*(1000-len(self.yaw_locs))
-        full_pitch = self.pitch_locs + [self.pitch_locs[-1]]*(1000-len(self.pitch_locs))
-        self.loc_graph.set_data(full_yaw, full_pitch)
-        # re-drawing the figure
-        self.ax2.draw_artist(self.ax2.patch)
-        self.ax2.draw_artist(self.loc_graph)
-        self.fig.canvas.update()
-        
-        # to flush the GUI events
-        self.fig.canvas.flush_events()
+        # if self.window_revealed:
+        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
         
 
+        
         # device.setup_velocity(max_velocity=velocity)
         # device.move_by(amount)
         # while(device._is_moving()):
@@ -365,30 +374,28 @@ class MotorApplication:
         pitch_loc = self.devicePitch.get_position()
         self.yaw_locs.append(yaw_loc)
         self.pitch_locs.append(pitch_loc)
-        full_yaw = self.yaw_locs + [self.yaw_locs[-1]]*(1000-len(self.yaw_locs))
-        full_pitch = self.pitch_locs + [self.pitch_locs[-1]]*(1000-len(self.pitch_locs))
-        self.loc_graph.set_data(full_yaw, full_pitch)
-
-        self.ax1.draw_artist(self.ax1.patch)
-        self.ax1.draw_artist(self.loc_graph)
-        self.fig.canvas.update()
-        self.fig.canvas.flush_events()
+        self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
+        self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
+        # if self.window_revealed:
+        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
 
 
-    def keepCentered(self):
+    def keepCentered(self, binFactor):
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
             if  newVal < self.currVal*self.deviationVal:
-                self.currVal = self.adjustBeams(self.deviceYaw, self.devicePitch)
+                self.currVal = self.adjustBeams(self.deviceYaw, self.devicePitch, binFactor)
 
     def plotField(self, binFactor):
-
+        self.adjustBeams(1)
         minYaw, maxYaw = self.findBoundaries(self.deviceYaw, binFactor)
         print("yaw boundaries found")
+        # self.main_window.quitApp()
         minPitch, maxPitch = self.findBoundaries(self.devicePitch, binFactor)
         print("pitch boundaries found")
-        amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, self.deviceYaw, self.devicePitch)
+        print(minYaw, maxYaw, minPitch, maxPitch)
+        amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
         plt.imshow(amplitude_2d, cmap='hsv', interpolation='nearest')
         plt.savefig("spec_graph.png")
     
