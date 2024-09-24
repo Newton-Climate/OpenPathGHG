@@ -11,6 +11,7 @@ import scipy
 import matplotlib.pyplot as plt
 import csv
 import app
+import datetime
 
 import random
 import matplotlib
@@ -25,23 +26,6 @@ from matplotlib.figure import Figure
 
 dwf = ctypes.cdll.dwf
 
-# # load the dynamic library, get constants path (the path is OS specific)
-# if platform.startswith("win"):
-#     # on Windows
-#     dwf = ctypes.cdll.dwf
-#     constants_path = "C:" + sep + "Program Files (x86)" + sep + "Digilent" + sep + "WaveFormsSDK" + sep + "samples" + sep + "py"
-# elif platform.startswith("darwin"):
-#     # on macOS
-#     lib_path = sep + "Library" + sep + "Frameworks" + sep + "dwf.framework" + sep + "dwf"
-#     dwf = ctypes.cdll.LoadLibrary(lib_path)
-#     constants_path = sep + "Applications" + sep + "WaveForms.app" + sep + "Contents" + sep + "Resources" + sep + "SDK" + sep + "samples" + sep + "py"
-# else:
-#     # on Linux
-#     dwf = ctypes.cdll.LoadLibrary("libdwf.so")
-#     constants_path = sep + "usr" + sep + "share" + sep + "digilent" + sep + "waveforms" + sep + "samples" + sep + "py"
- 
-# # import constants
-# path.append(constants_path)
 HERE = Path(__file__).parent
 path.append(str(HERE / 'py/'))
 path.append('py')
@@ -61,7 +45,7 @@ class data:
 class MotorApplication:
     def __enter__(self):
         return self
-    def __init__(self, serialNoYaw, serialNoPitch, yawBoundary, pitchBoundary, deviationVal, startYaw, startPitch):
+    def __init__(self, serialNoYaw, serialNoPitch, yawBoundary, pitchBoundary, deviationVal, startYaw, startPitch, loc_log):
         self.device_data = device.open()
         print("device opened")
         scope.open(self.device_data, sampling_frequency=8.192e04, buffer_size=8192, amplitude_range=50)
@@ -78,27 +62,9 @@ class MotorApplication:
         print(self.deviceYaw.get_device_info())
         
         self.recenterHome(startYaw, startPitch)
-        # self.deviceYaw.move_by(5000)
-        # self.deviceYaw.wait_move()
         print(f'pos: {self.deviceYaw.get_position()}')
 
-        # self.deviceYaw.home(sync=False, force=True, timeout=5000000)
-        # self.devicePitch.home(sync=False, force=True, timeout=5000000)
-        # print(self.deviceYaw.is_homing())
-        # print(self.deviceYaw.is_homed())
-        # self.deviceYaw.wait_for_home()
-        # self.devicePitch.wait_for_home()
-        # print("done homing")
-
-
-        # self.application = QtWidgets.QApplication(m, sys.argv)
-        # self.w = app.MainWindow()
-        # self.application.exec()
-
         self.nyq_freq = data.sampling_frequency/2
-        # plt.ion()
-        # print("ion started")
-        # self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2)
         buffer = scope.record(self.device_data, channel=1)
         print(f"recorded, len {len(buffer)}")
         self.total_samples = len(buffer)
@@ -127,6 +93,8 @@ class MotorApplication:
         self.deviationVal = deviationVal
         self.keepingCentered = False
         print(self.deviceYaw.get_limit_switch_parameters())
+
+        self.loc_log = loc_log
             
 
     def windowRevealed(self, window):
@@ -139,7 +107,6 @@ class MotorApplication:
         self.devicePitch.setup_limit_switch(sw_kind='ignore')
         # self.deviceYaw.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
         # self.devicePitch.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
-
 
         self.start_loc_yaw = newYaw
         self.start_loc_pitch = newPitch
@@ -156,18 +123,17 @@ class MotorApplication:
         buffer = scope.record(self.device_data, channel=1)
         self.total_samples = len(buffer)
         spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
-        # if self.window_revealed:
-        #     self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
+        if self.window_revealed:
+            self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
         return spectrum
 
     def checkSpectrum(self):
 
         spectrums = []
         for _ in range(10):
-            # print("observed")
             spectrum = self.getSpectrum()
-            
             spectrums.append(spectrum)
+            
         spectrums = np.array(spectrums)
         spectrum = np.mean(spectrums, axis=0)
         noisy_spectrum = [*spectrum[:self.start_index], *spectrum[self.end_index:]]
@@ -187,7 +153,7 @@ class MotorApplication:
         return yawVal, pitchVal
 
     def adjustBeam(self, device, binFactor):
-        self.currVal = self.checkVal(self.spec_graph)
+        self.currVal = self.checkVal()
         newVal = self.currVal
         goingForward = 1
         while newVal >= self.currVal:
@@ -211,7 +177,7 @@ class MotorApplication:
         nextReverse = 1
         while binFactor > 1:
             binFactor /= 2
-            device.moveBy(goingForward*binFactor)
+            self.safeMove(device, goingForward*binFactor)
             newVal = self.checkVal()
             goingForward = nextReverse * goingForward
             if newVal > self.currVal:
@@ -303,60 +269,17 @@ class MotorApplication:
         return amplitude_2d
 
     def safeMove(self, device, amount, velocity=79475.19421577454):
-        # print("starting move")
         device.move_by(amount)
         device.wait_move()
-        # print("ending move")
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
         self.yaw_locs.append(yaw_loc)
         self.pitch_locs.append(pitch_loc)
-        # if self.window_revealed:
-        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
+        if self.window_revealed:
+            self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
+        ct = datetime.datetime.now()
+        self.loc_log.write(f"{ct}, {yaw_loc}, {pitch_loc},\n")
         
-
-        
-        # device.setup_velocity(max_velocity=velocity)
-        # device.move_by(amount)
-        # while(device._is_moving()):
-        #     yaw_loc = self.deviceYaw.get_position()
-        #     pitch_loc = self.devicePitch.get_position()
-        #     # print(self.yaw_locs, self.pitch_locs)
-        #     self.yaw_locs.append(yaw_loc)
-        #     self.pitch_locs.append(pitch_loc)
-        #     # print(yaw_loc, pitch_loc)
-        #     full_yaw = self.yaw_locs + [self.yaw_locs[-1]]*(1000-len(self.yaw_locs))
-        #     full_pitch = self.pitch_locs + [self.pitch_locs[-1]]*(1000-len(self.pitch_locs))
-        #     self.loc_graph.set_data(full_yaw, full_pitch)
-            
-        #     plt.pause(0.01)
-        #     if np.abs(self.start_loc_yaw - yaw_loc) > self.yawBoundary or np.abs(self.start_loc_pitch - pitch_loc) > self.pitchBoundary:
-        #         print("stopping")
-        #         self.deviceYaw.stop()
-        #         self.devicePitch.stop()
-        #         raise Exception(f"motor has left present boundaries with yaw of {yaw_loc} and pitch of {pitch_loc}")
-
-    # def safeMoveTo(self, device, loc, velocity=79475.19421577454):
-    #     device.setup_velocity(max_velocity=velocity)
-    #     device.move_to(loc)
-    #     while(device._is_moving()):
-    #         yaw_loc = self.deviceYaw.get_position()
-    #         pitch_loc = self.devicePitch.get_position()
-    #         print(yaw_loc, pitch_loc)
-    #         self.yaw_locs.append(yaw_loc)
-    #         self.pitch_locs.append(pitch_loc)
-    #         # print(yaw_loc, pitch_loc)
-    #         full_yaw = self.yaw_locs + [self.yaw_locs[-1]]*(1000-len(self.yaw_locs))
-    #         full_pitch = self.pitch_locs + [self.pitch_locs[-1]]*(1000-len(self.pitch_locs))
-    #         self.loc_graph.set_data(full_yaw, full_pitch)
-            
-            
-    #         if np.abs(self.start_loc_yaw - yaw_loc) > self.yawBoundary or np.abs(self.start_loc_pitch - pitch_loc) > self.pitchBoundary:
-    #             print("stopping")
-    #             self.deviceYaw.stop()
-    #             self.devicePitch.stop()
-    #             raise Exception(f"motor has left present boundaries with yaw of {yaw_loc} and pitch of {pitch_loc}")
-
     def home(self, velocity=79475.19421577454):
         print(self.start_loc_yaw)
         print(self.start_loc_pitch)
@@ -376,8 +299,8 @@ class MotorApplication:
         self.pitch_locs.append(pitch_loc)
         self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
         self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
-        # if self.window_revealed:
-        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
+        if self.window_revealed:
+            self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
 
 
     def keepCentered(self, binFactor):
@@ -388,7 +311,15 @@ class MotorApplication:
                 self.currVal = self.adjustBeams(self.deviceYaw, self.devicePitch, binFactor)
 
     def plotField(self, binFactor):
+        print(self.deviceYaw.get_scale_units())
+        print(self.deviceYaw.get_scale())
+        print(self.devicePitch.get_scale_units())
+        print(self.devicePitch.get_scale())
         self.adjustBeams(1)
+        newHomeYaw = self.deviceYaw.get_position()
+        newHomePitch = self.devicePitch.get_position()
+        print(f"yaw: {newHomeYaw}, pitch: {newHomePitch}")
+        self.recenterHome(newHomeYaw, newHomePitch)
         minYaw, maxYaw = self.findBoundaries(self.deviceYaw, binFactor)
         print("yaw boundaries found")
         # self.main_window.quitApp()
@@ -396,7 +327,11 @@ class MotorApplication:
         print("pitch boundaries found")
         print(minYaw, maxYaw, minPitch, maxPitch)
         amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
-        plt.imshow(amplitude_2d, cmap='hsv', interpolation='nearest')
+        step_pitch = 4.88e-4
+        step_yaw = 8.79e-4
+        plt.imshow(amplitude_2d, cmap='hsv', interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
+        plt.colorbar()
+
         plt.savefig("spec_graph.png")
     
     
@@ -417,21 +352,18 @@ class MotorApplication:
         
 
 if __name__ == '__main__':
-    # serialNoYaw = "27006315"
-    # serialNoPitch = "27006283"
-    serialNoYaw = "27250209"
-    serialNoPitch = "27250140"
-    yawBoundary = 2000
-    pitchBoundary = 1000
-    start_yaw = 218523
-    start_pitch = 241626
-    deviationVal = 0.5
-    binFactor = 50
+    with open("loc_coords.txt", "ab") as loc_log:
+        # serialNoYaw = "27006315"
+        # serialNoPitch = "27006283"
+        serialNoYaw = "27250209"
+        serialNoPitch = "27250140"
+        yawBoundary = 2000
+        pitchBoundary = 1000
+        start_yaw = 218523
+        start_pitch = 241626
+        deviationVal = 0.5
+        binFactor = 50
 
-    with MotorApplication(serialNoYaw, serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch) as m:
-        print("about to plot field")
-        m.plotField(binFactor)
-
-    # except Exception as e:
-    #     print("ERROR! ALERT!")
-    #     print(e)
+        with MotorApplication(serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch, loc_log=loc_log) as m:
+            print("about to plot field")
+            m.plotField(binFactor)

@@ -77,13 +77,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.keepAligned.text() == "Keep Beam Aligned":
             self.keepAligned.setText("Keeping Aligned")
             self.mapField.setText("Cannot Map Field While Keeping Aligned")
-            self.setEnabled(False)
-            # motorapp.keepCentered()
+            self.mapField.setEnabled(False)
+            self.motorapp.keepCentered()
         else:
             self.keepAligned.setText("Keep Beam Aligned")
             self.mapField.setText("Map Beam's Physical Field")
-            self.setEnabled(True)
-            # motorapp.keepingCentered = False
+            self.mapField.setEnabled(True)
+            self.motorapp.keepingCentered = False
     
     def mapFieldClicked(self):
         self.keepAligned.setText("Cannot Keep Aligned While Mapping Field")
