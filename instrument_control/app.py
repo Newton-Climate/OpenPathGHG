@@ -78,7 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.keepAligned.setText("Keeping Aligned")
             self.mapField.setText("Cannot Map Field While Keeping Aligned")
             self.mapField.setEnabled(False)
-            self.motorapp.keepCentered()
+            self.motorapp.keepCentered(1)
         else:
             self.keepAligned.setText("Keep Beam Aligned")
             self.mapField.setText("Map Beam's Physical Field")
@@ -99,6 +99,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
     def update_plot1(self, spectrum):
         # self.spectrum = m.getSpectrum()[m.start_index:m.end_index]
+        print("update1")
 
         # Note: we no longer need to clear the axis.
         if self._plot_ref1 is None:
@@ -121,7 +122,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_plot2(self, yaw_locs, pitch_locs):
         # self.yaw_loc_data = m.yaw_locs
         # self.pitch_loc_data = m.pitch_locs
-
+        print("update2")
         # Note: we no longer need to clear the axis.
         if self._plot_ref2 is None:
             # First time we have no plot reference, so do a normal plot.
@@ -143,17 +144,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def revealWindow():
-
-    with kdc_control.MotorApplication(serialNoYaw, serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch) as m:
-        app = QtWidgets.QApplication(sys.argv)
-        print("created")
-        w = MainWindow(m)
-        print("made main window")
-        # motorapp = m
-        # m.window_revealed = True
-        m.windowRevealed(w)
-        app.exec()
-        print("executed")
+    with open("loc_coords.txt", "a") as loc_log:
+        with kdc_control.MotorApplication(serialNoYaw, serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch) as m:
+            app = QtWidgets.QApplication(sys.argv)
+            print("created")
+            w = MainWindow(m)
+            print("made main window")
+            # motorapp = m
+            # m.window_revealed = True
+            m.windowRevealed(w)
+            app.exec()
+            print("executed")
 
 
 if __name__ == '__main__':

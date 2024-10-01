@@ -19,6 +19,7 @@ import datetime
 
 import random
 import matplotlib
+from matplotlib import cm
 import time
 
 """
@@ -29,7 +30,7 @@ dwf = ctypes.cdll.dwf
 HERE = Path(__file__).parent
 path.append(str(HERE / 'py/'))
 path.append('py')
-import dwfconstants as constants
+# import dwfconstants as constants
 from WF_SDK import device, scope, wavegen, error   # import instruments
 
 modulename = "WF_SDK"
@@ -49,7 +50,7 @@ class MotorApplication:
     def __enter__(self):
         """Allows for motor, digilent to be properly spun down and closed using __exit__ even if program is interrupted. """
         return self
-    def __init__(self, serialNoYaw, serialNoPitch, yawBoundary, pitchBoundary, deviationVal, startYaw, startPitch, loc_log):
+    def __init__(self, currPeaked, serialNoYaw, serialNoPitch, yawBoundary, pitchBoundary, deviationVal, startYaw, startPitch, loc_log):
         """Initialize monitoring setup.
 
         Keyword arguments:
@@ -72,12 +73,13 @@ class MotorApplication:
         self.pitchBoundary = pitchBoundary
         time.sleep(0.5)
         print(self.deviceYaw.get_device_info())
-        self.recenterHome(startYaw, startPitch)
-        self.currPositionYaw = self.deviceYaw.get_position()
-        self.currPositionPitch = self.devicePitch.get_position()
-        self.yaw_locs = [self.currPositionYaw]
-        self.pitch_locs = [self.currPositionPitch]
-        print(f'pos: {self.currPositionYaw}, {self.currPositionPitch}')
+        self.yaw_locs = []
+        self.pitch_locs = []
+        if not currPeaked:
+            self.recenterHome(startYaw, startPitch)
+        else:
+            self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
+        print(f'pos: {self.deviceYaw.get_position()}, {self.devicePitch.get_position()}')
 
         """ Run digilent """
         self.device_data = device.open()
@@ -98,10 +100,10 @@ class MotorApplication:
         print(f'start index: {self.start_index}')
         self.end_index = int(self.target_index*1.1)
         print(f'end index: {self.end_index}')
-        self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
+        # self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
         self.freq_range = self.freq_range[self.start_index:self.end_index]
-        self.spectrum = self.spectrum[self.start_index:self.end_index]
-        self.currVal, self.spectrum = self.checkSpectrum()
+        # self.spectrum = self.spectrum[self.start_index:self.end_index]
+        self.currVal, _ = self.checkSpectrum()
 
     def windowRevealed(self, window):
         """ Called from GUI when it is ready to display. No updates will be made until the window is revealed. """
@@ -124,8 +126,9 @@ class MotorApplication:
         buffer = scope.record(self.device_data, channel=1)
         self.total_samples = len(buffer)
         spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
-        if self.window_revealed:
-            self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
+        self.export_spectrum = spectrum[self.start_index:self.end_index]
+        # if self.window_revealed:
+        #     self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
         return spectrum
 
     def checkSpectrum(self):
@@ -147,6 +150,7 @@ class MotorApplication:
     def checkVal(self):
         """ Just get the amplitude of the 9kHz modulation peak from checkSpectrum. """
         currValReturn, _ = self.checkSpectrum()
+        self.globalVal = currValReturn
         return currValReturn
 
     def adjustBeams(self, binFactor):
@@ -155,20 +159,23 @@ class MotorApplication:
         pitchVal = self.adjustBeam(self.devicePitch, binFactor)
         return yawVal, pitchVal
 
-    def adjustBeam(self, device, binFactor):
+    def adjustBeam(self, device, startingBinFactor):
         """ Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
         self.currVal = self.checkVal()
         newVal = self.currVal
         goingForward = 1
+        binFactor = startingBinFactor
         while newVal >= self.currVal:
             self.currVal = newVal
             self.safeMove(device, goingForward*binFactor)
+            time.sleep(0.5)
             binFactor *= 2
             newVal = self.checkVal()
-        if binFactor == 2:
-            binFactor = 1
+        if binFactor == 2*startingBinFactor:
+            binFactor = startingBinFactor
             goingForward = -1
             self.safeMove(device, goingForward*binFactor)
+            time.sleep(0.5)
             newVal = self.checkVal()
             self.currVal = newVal
             while newVal >= self.currVal:
@@ -179,7 +186,7 @@ class MotorApplication:
 
         goingForward *= -1
         nextReverse = 1
-        while binFactor > 1:
+        while binFactor > startingBinFactor:
             binFactor /= 2
             self.safeMove(device, goingForward*binFactor)
             newVal = self.checkVal()
@@ -233,6 +240,7 @@ class MotorApplication:
         while newVal >= self.currVal*self.deviationVal:
             self.safeMove(device, binFactor)
             print(device.get_position())
+            time.sleep(0.5)
             newVal = self.checkVal()
             print(f'currval: {self.currVal}, newval: {newVal}')
             offset_max += 1
@@ -241,21 +249,22 @@ class MotorApplication:
         print(f"moved back to {device.get_position()}")
         newVal = self.checkVal()
         print(f"new val: {newVal}")
-        if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
-            print("exception, your honor")
-            raise Exception(f"motor hasn't returned sufficiently to origin going up, amplitude is now {newVal/self.currVal} of previous")
+        # if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
+        #     print("exception, your honor")
+        #     raise Exception(f"motor hasn't returned sufficiently to origin going up, amplitude is now {newVal/self.currVal} of previous")
         self.currVal = newVal
         while newVal >= self.currVal*self.deviationVal:
             self.safeMove(device, -binFactor)
             print(device.get_position())
+            time.sleep(0.5)
             newVal = self.checkVal()
             print(f'currval: {self.currVal}, newval: {newVal}')
             offset_min += 1
         self.home(1000)
         newVal = self.checkVal()
-        if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
-            print("exception, your honor")
-            raise Exception(f"motor hasn't returned sufficiently to origin going down, amplitude is now {newVal/self.currVal} of previous")
+        # if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
+        #     print("exception, your honor")
+        #     raise Exception(f"motor hasn't returned sufficiently to origin going down, amplitude is now {newVal/self.currVal} of previous")
         print(offset_min*binFactor, offset_max*binFactor)
         return offset_min*binFactor, offset_max*binFactor
 
@@ -284,10 +293,10 @@ class MotorApplication:
         pitch_loc = self.devicePitch.get_position()
         self.yaw_locs.append(yaw_loc)
         self.pitch_locs.append(pitch_loc)
-        if self.window_revealed:
-            self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
+        # if self.window_revealed:
+        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
         ct = datetime.datetime.now()
-        self.loc_log.write(f"{ct}, {yaw_loc}, {pitch_loc},\n")
+        self.loc_log.write(f"{ct}, {yaw_loc}, {pitch_loc}, {self.globalVal},\n")
         
     def home(self, velocity=79475.19421577454):
         """Go to some predefined home."""
@@ -309,16 +318,17 @@ class MotorApplication:
         self.pitch_locs.append(pitch_loc)
         self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
         self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
-        if self.window_revealed:
-            self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
+        # if self.window_revealed:
+        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
 
     def keepCentered(self, binFactor):
         """Currently, run adjustBeams if the signal drops below a specific value, but could constantly adjust the beam."""
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
-            if  newVal < self.currVal*self.deviationVal:
-                self.currVal = self.adjustBeams(self.deviceYaw, self.devicePitch, binFactor)
+            print(newVal, self.deviceYaw.get_position(), self.devicePitch.get_position())
+            # if  newVal < self.currVal*self.deviationVal:
+            self.currVal = self.adjustBeams(binFactor)
 
     def plotField(self, binFactor):
         """ Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray """
@@ -339,7 +349,7 @@ class MotorApplication:
         amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
         step_pitch = 4.88e-4
         step_yaw = 8.79e-4
-        plt.imshow(amplitude_2d, cmap='hsv', interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
+        plt.imshow(amplitude_2d, cmap=cm.coolwarm, interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
         plt.colorbar()
 
         plt.savefig("spec_graph.png")
@@ -362,19 +372,19 @@ class MotorApplication:
             writer.writerows(motor_locs)
         
 
-if __name__ == '__main__':
-    with open("loc_coords.txt", "ab") as loc_log:
-        # serialNoYaw = "27006315"
-        # serialNoPitch = "27006283"
-        serialNoYaw = "27250209"
-        serialNoPitch = "27250140"
-        yawBoundary = 2000
-        pitchBoundary = 1000
-        start_yaw = 218523
-        start_pitch = 241626
-        deviationVal = 0.5
-        binFactor = 50
+# if __name__ == '__main__':
+#     with open("loc_coords.txt", "ab") as loc_log:
+#         # serialNoYaw = "27006315"
+#         # serialNoPitch = "27006283"
+#         serialNoYaw = "27250209"
+#         serialNoPitch = "27250140"
+#         yawBoundary = 2000
+#         pitchBoundary = 1000
+#         start_yaw = 218523
+#         start_pitch = 241626
+#         deviationVal = 0.5
+#         binFactor = 50
 
-        with MotorApplication(serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch, loc_log=loc_log) as m:
-            print("about to plot field")
-            m.plotField(binFactor)
+#         with MotorApplication(serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch, loc_log=loc_log) as m:
+#             print("about to plot field")
+#             m.plotField(binFactor)
