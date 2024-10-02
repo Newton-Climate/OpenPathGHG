@@ -21,17 +21,19 @@ from threading import Thread
     # sys.exit(status)
 
 class Worker(QObject):
-    def __init__(motorapp):
+    def __init__(self, motorapp):
+        super(Worker, self).__init__()
         self.motorapp = motorapp
-        self.finished = pyqtSignal()
+    
+    finished = pyqtSignal()
 
     def keepCentered(self):
         self.motorapp.keepCentered(50)
-        self.finished.emit()
+        finished.emit()
     
     def plotField(self):
         self.motorapp.plotField(200)
-        self.finished.emit()
+        finished.emit()
         
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -74,6 +76,10 @@ class MainWindow(QtWidgets.QMainWindow):
         container.setLayout(layout1)
         self.setCentralWidget(container)
 
+        self.thread = QThread()
+        self.worker = Worker(self.motorapp)
+        self.worker.moveToThread(self.thread)
+
         self.keepAligned.clicked.connect(self.keepAlignedClicked)
         self.mapField.clicked.connect(self.mapFieldClicked)
 
@@ -84,21 +90,16 @@ class MainWindow(QtWidgets.QMainWindow):
         print(threading.current_thread().name)
 
 
-        # time.sleep(5)
+        time.sleep(5)
         # # Add a timer to simulate new temperature measurements
-        # self.timer = QtCore.QTimer()
-        # self.timer.setInterval(20)
-        # self.timer.timeout.connect(self.update_plot1)
-        # self.timer.timeout.connect(self.update_plot2)
-        # self.timer.start()
+        self.timer = QtCore.QTimer()
+        self.timer.setInterval(20)
+        self.timer.timeout.connect(self.update_plot1)
+        self.timer.timeout.connect(self.update_plot2)
+        self.timer.start()
 
     def keepAlignedClicked(self):
         if self.keepAligned.text() == "Keep Beam Aligned":
-            self.thread = QThread()
-
-            self.worker = Worker(self.motorapp)
-
-            self.worker.moveToThread(self.thread)
 
             self.thread.started.connect(self.worker.keepCentered)
             self.worker.finished.connect(self.thread.quit)
@@ -116,12 +117,6 @@ class MainWindow(QtWidgets.QMainWindow):
         
     
     def mapFieldClicked(self):
-
-        self.thread = QThread()
-
-        self.worker = Worker(self.motorapp)
-
-        self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.plotField)
         self.worker.finished.connect(self.thread.quit)
@@ -147,13 +142,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_plot1(self):
         # print("update1")
-        print(threading.current_thread().name)
+        # print(threading.current_thread().name)
         spectrum = self.motorapp.export_spectrum
         try:
             self.line1.setData(self.motorapp.freq_range, spectrum)
 
         except:
-            print("plotted")
+            # print("plotted")
             self.line1 = self.graph1.plot(self.motorapp.freq_range, spectrum,
                 # pen=pen,
             )
