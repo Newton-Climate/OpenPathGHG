@@ -16,6 +16,8 @@ import csv
 import app
 import app2
 import datetime
+from statistics import mean, stdev
+import math
 
 import random
 import matplotlib
@@ -60,6 +62,7 @@ class MotorApplication:
         startYaw, startPitch -- The initial homed yaw and pitch, reset when recenterHome is called. Note: not the motors' home values.
         loc_log -- Text file where timestamped motor positions are output after each move.
         """
+        self.sample_size = 20
 
         self.deviationVal = deviationVal
         self.keepingCentered = False
@@ -72,7 +75,7 @@ class MotorApplication:
         self.yawBoundary = yawBoundary
         self.pitchBoundary = pitchBoundary
         time.sleep(0.5)
-        print(self.deviceYaw.get_device_info())
+        # print(self.deviceYaw.get_device_info())
         self.yaw_locs = []
         self.pitch_locs = []
         if not currPeaked:
@@ -105,6 +108,19 @@ class MotorApplication:
         # self.spectrum = self.spectrum[self.start_index:self.end_index]
         self.currVal, _ = self.checkSpectrum()
 
+        data_arr = []
+        for i in range(1000):
+            print(i)
+            val = np.max(self.getSpectrum()[self.start_index:self.end_index])
+            data_arr.append(val)
+        print(f'average: {mean(data_arr)}, stdev: {stdev(data_arr)}')
+        moe = mean(data_arr)/20
+        zscore = 1.96
+        n = (zscore*stdev(data_arr)/moe)**2
+        self.sample_size = int(math.ceil(n))
+        print(f'n is {n}')
+
+
     def windowRevealed(self, window):
         """ Called from GUI when it is ready to display. No updates will be made until the window is revealed. """
         self.main_window = window
@@ -119,7 +135,7 @@ class MotorApplication:
         # self.devicePitch.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
         self.start_loc_yaw = newYaw
         self.start_loc_pitch = newPitch
-        self.home(1000)
+        self.home()
 
     def getSpectrum(self):
         """ Get a single spectrum measurement from the digilent, then plot it if the GUI is revealed. """
@@ -134,15 +150,16 @@ class MotorApplication:
     def checkSpectrum(self):
         """ Run getSpectrum 10 times, average them and denoise, then extract the peak and return """
         spectrums = []
-        for _ in range(10):
+        for _ in range(self.sample_size):
             spectrum = self.getSpectrum()
             spectrums.append(spectrum)
 
         spectrums = np.array(spectrums)
         spectrum = np.mean(spectrums, axis=0)
-        noisy_spectrum = [*spectrum[:self.start_index], *spectrum[self.end_index:]]
-        noise_level = np.mean(noisy_spectrum)
-        denoised_spectrum = (spectrum - noise_level) #Note: Could do more sophisticated denoising, right now just subtracting avg background
+        # noisy_spectrum = [*spectrum[:self.start_index], *spectrum[self.end_index:]]
+        # noise_level = np.mean(noisy_spectrum)
+        # denoised_spectrum = (spectrum - noise_level) #Note: Could do more sophisticated denoising, right now just subtracting avg background
+        denoised_spectrum = spectrum
         graph_spectrum = spectrum[self.start_index:self.end_index]
         return np.max(denoised_spectrum[self.start_index:self.end_index]), graph_spectrum
 
@@ -163,7 +180,8 @@ class MotorApplication:
         """ Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
         self.currVal = self.checkVal()
         newVal = self.currVal
-        goingForward = 1
+        goingForward = random.randint(0, 1)*2-1
+        print(f"flipped a {goingForward}")
         binFactor = startingBinFactor
         while newVal >= self.currVal:
             self.currVal = newVal
@@ -245,7 +263,7 @@ class MotorApplication:
             print(f'currval: {self.currVal}, newval: {newVal}')
             offset_max += 1
         print(f"started at {starting_loc}, now at {device.get_position()}")
-        self.home(1000)
+        self.home()
         print(f"moved back to {device.get_position()}")
         newVal = self.checkVal()
         print(f"new val: {newVal}")
@@ -260,7 +278,7 @@ class MotorApplication:
             newVal = self.checkVal()
             print(f'currval: {self.currVal}, newval: {newVal}')
             offset_min += 1
-        self.home(1000)
+        self.home()
         newVal = self.checkVal()
         # if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
         #     print("exception, your honor")
@@ -305,6 +323,7 @@ class MotorApplication:
         self.deviceYaw.setup_velocity(max_velocity=velocity)
         self.devicePitch.setup_velocity(max_velocity=velocity)
         self.deviceYaw.move_to(self.start_loc_yaw)
+        print("moooving")
         self.deviceYaw.wait_move()
         self.devicePitch.move_to(self.start_loc_pitch)
         self.devicePitch.wait_move()
@@ -336,7 +355,7 @@ class MotorApplication:
         print(self.deviceYaw.get_scale())
         print(self.devicePitch.get_scale_units())
         print(self.devicePitch.get_scale())
-        self.adjustBeams(1)
+        self.adjustBeams(20)
         newHomeYaw = self.deviceYaw.get_position()
         newHomePitch = self.devicePitch.get_position()
         print(f"yaw: {newHomeYaw}, pitch: {newHomePitch}")
@@ -347,8 +366,10 @@ class MotorApplication:
         print("pitch boundaries found")
         print(minYaw, maxYaw, minPitch, maxPitch)
         amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
-        step_pitch = 4.88e-4
-        step_yaw = 8.79e-4
+        # step_pitch = 4.88e-4
+        step_pitch = 7.234e-6
+        # step_yaw = 8.79e-4
+        step_yaw = 13.023e-6
         plt.imshow(amplitude_2d, cmap=cm.coolwarm, interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
         plt.colorbar()
 

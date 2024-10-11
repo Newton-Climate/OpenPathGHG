@@ -29,11 +29,11 @@ class Worker(QObject):
 
     def keepCentered(self):
         self.motorapp.keepCentered(50)
-        finished.emit()
+        self.finished.emit()
     
     def plotField(self):
         self.motorapp.plotField(200)
-        finished.emit()
+        self.finished.emit()
         
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -76,10 +76,6 @@ class MainWindow(QtWidgets.QMainWindow):
         container.setLayout(layout1)
         self.setCentralWidget(container)
 
-        self.thread = QThread()
-        self.worker = Worker(self.motorapp)
-        self.worker.moveToThread(self.thread)
-
         self.keepAligned.clicked.connect(self.keepAlignedClicked)
         self.mapField.clicked.connect(self.mapFieldClicked)
 
@@ -101,6 +97,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def keepAlignedClicked(self):
         if self.keepAligned.text() == "Keep Beam Aligned":
 
+            self.thread = QThread()
+            self.worker = Worker(self.motorapp)
+            self.worker.moveToThread(self.thread)
+
             self.thread.started.connect(self.worker.keepCentered)
             self.worker.finished.connect(self.thread.quit)
             self.worker.finished.connect(self.worker.deleteLater)
@@ -117,6 +117,10 @@ class MainWindow(QtWidgets.QMainWindow):
         
     
     def mapFieldClicked(self):
+
+        self.thread = QThread()
+        self.worker = Worker(self.motorapp)
+        self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.plotField)
         self.worker.finished.connect(self.thread.quit)
@@ -159,13 +163,17 @@ class MainWindow(QtWidgets.QMainWindow):
         pitch_locs = self.motorapp.pitch_locs
         try:
             self.line2.setData(yaw_locs, pitch_locs)
-            self.graph2.setXRange(start_yaw - yawBoundary, start_yaw + yawBoundary)
-            self.graph2.setYRange(start_pitch - pitchBoundary, start_pitch + pitchBoundary)
+            self.dot.setData([yaw_locs[-1]], [pitch_locs[-1]], symbol="o")
+            # self.graph2.setXRange(start_yaw - yawBoundary, start_yaw + yawBoundary)
+            # self.graph2.setYRange(start_pitch - pitchBoundary, start_pitch + pitchBoundary)
 
         except:
             self.line2 = self.graph2.plot(yaw_locs, pitch_locs,
                 # pen=pen,
             )
+            self.dot = pg.ScatterPlotItem()
+            self.dot.addPoints([yaw_locs[-1]], [pitch_locs[-1]], symbol="o")
+            self.graph2.addItem(self.dot)
 
     # def update_plot(self):
     #     self.time = self.time[1:]
