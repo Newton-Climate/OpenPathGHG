@@ -28,11 +28,15 @@ class Worker(QObject):
     finished = pyqtSignal()
 
     def keepCentered(self):
-        self.motorapp.keepCentered(50)
+        self.motorapp.keepCentered()
         self.finished.emit()
     
     def plotField(self):
         self.motorapp.plotField(200)
+        self.finished.emit()
+
+    def calibrateSampleBin(self):
+        self.motorapp.calibrateSampleBin()
         self.finished.emit()
         
 
@@ -50,8 +54,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.keepAligned = QPushButton("Keep Beam Aligned")
         self.mapField = QPushButton("Map Beam's Physical Field")
+        self.calibrateDevice = QPushButton("Calibrate Device")
         layout2.addWidget(self.keepAligned)
         layout2.addWidget(self.mapField)
+        layout2.addWidget(self.calibrateDevice)
         layout1.addLayout(layout2)
 
         self.pg_layout = pg.GraphicsLayoutWidget()
@@ -78,6 +84,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.keepAligned.clicked.connect(self.keepAlignedClicked)
         self.mapField.clicked.connect(self.mapFieldClicked)
+        self.calibrateDevice.clicked.connect(self.calibrateDeviceClicked)
 
         # display_spectrum = motorapp.getSpectrum()[motorapp.start_index:motorapp.end_index]
         # print(len(display_spectrum))
@@ -110,7 +117,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
             self.keepAligned.setText("Keeping Aligned")
             self.mapField.setText("Cannot Map Field While Keeping Aligned")
+            self.calibrateDevice.setText("Cannot Calibrate Device While Keeping Aligned")
             self.mapField.setEnabled(False)
+            self.calibrateDevice.setEnabled(False)
         else:
             self.restoreButtons()
             self.motorapp.keepingCentered = False
@@ -131,8 +140,33 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.keepAligned.setText("Cannot Keep Aligned While Mapping Field")
         self.mapField.setText("Mapping Field")
+        self.calibrateDevice.setText("Cannot Calibrate Device While Mapping Field")
         self.keepAligned.setEnabled(False)
         self.mapField.setEnabled(False)
+        self.calibrateDevice.setEnabled(False)
+
+        self.thread.finished.connect(
+                self.restoreButtons
+            )
+    def calibrateDeviceClicked(self):
+
+        self.thread = QThread()
+        self.worker = Worker(self.motorapp)
+        self.worker.moveToThread(self.thread)
+
+        self.thread.started.connect(self.worker.calibrateSampleBin)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+
+        self.thread.start()
+        
+        self.keepAligned.setText("Cannot Keep Aligned While Calibrating Device")
+        self.mapField.setText("Cannot Map Field While Calibrating Device")
+        self.calibrateDevice.setText("Calibrating Device")
+        self.keepAligned.setEnabled(False)
+        self.mapField.setEnabled(False)
+        self.calibrateDevice.setEnabled(False)
 
         self.thread.finished.connect(
                 self.restoreButtons
@@ -141,8 +175,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def restoreButtons(self):
         self.keepAligned.setEnabled(True)
         self.mapField.setEnabled(True)
+        self.calibrateDevice.setEnabled(True)
         self.keepAligned.setText("Keep Beam Aligned")
         self.mapField.setText("Map Beam's Physical Field")
+        self.calibrateDevice.setText("Calibrate Device")
 
     def update_plot1(self):
         # print("update1")

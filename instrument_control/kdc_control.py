@@ -63,6 +63,13 @@ class MotorApplication:
         loc_log -- Text file where timestamped motor positions are output after each move.
         """
         self.sample_size = 20
+        self.binFactorYaw = 1
+        self.binFactorPitch = 1
+        # step_pitch = 4.88e-4
+        self.step_pitch = 7.234e-6
+        # step_yaw = 8.79e-4
+        self.step_yaw = 13.023e-6
+
 
         self.deviationVal = deviationVal
         self.keepingCentered = False
@@ -108,6 +115,14 @@ class MotorApplication:
         # self.spectrum = self.spectrum[self.start_index:self.end_index]
         self.currVal, _ = self.checkSpectrum()
 
+    def calibrateSampleBin(self):
+        # self.calibrateSampleSize()
+        # self.adjustBeams()
+        # self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
+        self.calibrateBinFactor()
+        self.adjustBeams()
+        
+    def calibrateSampleSize(self):
         data_arr = []
         for i in range(1000):
             print(i)
@@ -119,6 +134,37 @@ class MotorApplication:
         n = (zscore*stdev(data_arr)/moe)**2
         self.sample_size = int(math.ceil(n))
         print(f'n is {n}')
+    
+    def calibrateBinFactor(self):
+        self.binFactorYaw = 1
+        self.binFactorPitch = 1
+        hasMovedEnough = False
+        self.currVal = self.checkVal()
+        goingForwardYaw = 1
+        print(f'going forward yaw: {goingForwardYaw}')
+        while not hasMovedEnough:
+            self.safeMove(self.deviceYaw, goingForwardYaw*self.binFactorYaw)
+            newVal = self.checkCalibrationVal()
+            self.binFactorYaw *= 2
+            percent_diff = abs(newVal/self.currVal - 1)
+            print(f'percent diff: {percent_diff}')
+            hasMovedEnough = abs(newVal/self.currVal - 1) > .05
+        self.binFactorYaw /= 2
+        print(f'bin factor yaw: {self.binFactorYaw}')
+        self.safeMove(self.deviceYaw, goingForwardYaw*(-self.binFactorYaw + 1))
+        hasMovedEnough = False
+        goingForwardPitch = 1
+        print(f'going forward pitch: {goingForwardPitch}')
+        while not hasMovedEnough:
+            self.safeMove(self.devicePitch, goingForwardPitch*self.binFactorPitch)
+            newVal = self.checkCalibrationVal()
+            self.binFactorPitch *= 2
+            percent_diff = abs(newVal/self.currVal - 1)
+            print(f'percent diff: {percent_diff}')
+            hasMovedEnough = abs(newVal/self.currVal - 1) > .05
+        self.binFactorPitch /= 2
+        print(f'bin factor pitch: {self.binFactorPitch}')
+        self.safeMove(self.devicePitch, goingForwardPitch*(-self.binFactorPitch + 1))
 
 
     def windowRevealed(self, window):
@@ -169,59 +215,73 @@ class MotorApplication:
         currValReturn, _ = self.checkSpectrum()
         self.globalVal = currValReturn
         return currValReturn
+    
+    def checkCalibrationVal(self):
+        vals = []
+        for _ in range(10):
+            vals.append(self.checkVal())
+        return mean(vals)
 
-    def adjustBeams(self, binFactor):
+    def adjustBeams(self):
         """ Call adjustBeam on each of yaw and pitch separately (peak them up). """
-        yawVal = self.adjustBeam(self.deviceYaw, binFactor)
-        pitchVal = self.adjustBeam(self.devicePitch, binFactor)
+        yawVal = self.adjustBeam(self.deviceYaw, self.binFactorYaw)
+        pitchVal = self.adjustBeam(self.devicePitch, self.binFactorPitch)
         return yawVal, pitchVal
 
     def adjustBeam(self, device, startingBinFactor):
         """ Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
-        self.currVal = self.checkVal()
-        newVal = self.currVal
-        goingForward = random.randint(0, 1)*2-1
-        print(f"flipped a {goingForward}")
+        # self.currVal = self.checkVal()
+        # newVal = self.currVal
+        # goingForward = random.randint(0, 1)*2-1
+        # print(f"flipped a {goingForward}")
         binFactor = startingBinFactor
-        while newVal >= self.currVal:
-            self.currVal = newVal
-            self.safeMove(device, goingForward*binFactor)
-            time.sleep(0.5)
-            binFactor *= 2
+        goingForward = self.findBetterDirection(device, startingBinFactor)
+        binFactor *= 2
+        if goingForward != 0:
             newVal = self.checkVal()
-        if binFactor == 2*startingBinFactor:
-            binFactor = startingBinFactor
-            goingForward = -1
-            self.safeMove(device, goingForward*binFactor)
-            time.sleep(0.5)
-            newVal = self.checkVal()
-            self.currVal = newVal
             while newVal >= self.currVal:
                 self.currVal = newVal
                 self.safeMove(device, goingForward*binFactor)
                 binFactor *= 2
                 newVal = self.checkVal()
-
-        goingForward *= -1
-        nextReverse = 1
-        while binFactor > startingBinFactor:
-            binFactor /= 2
-            self.safeMove(device, goingForward*binFactor)
-            newVal = self.checkVal()
-            goingForward = nextReverse * goingForward
-            if newVal > self.currVal:
-                self.currVal = newVal
-                nextReverse = -1
-            else:
-                nextReverse = 1
-        self.safeMove(device, binFactor*goingForward)
-        newVal = self.checkVal()
-        if newVal < self.currVal:
-            goingForward *= nextReverse
+            goingForward *= -1
+            nextReverse = 1
+            while binFactor > startingBinFactor:
+                binFactor /= 2
+                self.safeMove(device, goingForward*binFactor)
+                newVal = self.checkVal()
+                goingForward = nextReverse * goingForward
+                if newVal > self.currVal:
+                    self.currVal = newVal
+                    nextReverse = -1
+                else:
+                    nextReverse = 1
             self.safeMove(device, binFactor*goingForward)
+            newVal = self.checkVal()
+            if newVal < self.currVal:
+                goingForward *= nextReverse
+                self.safeMove(device, binFactor*goingForward)
 
         newVal = self.checkVal()
+        self.remember_location()
         return newVal
+    
+    def findBetterDirection(self, device, binFactor):
+        self.currVal = self.checkVal()
+        self.safeMove(device, binFactor)
+        posVal = self.checkVal()
+        self.safeMove(device, -2*binFactor)
+        negVal = self.checkVal()
+        self.safeMove(device, binFactor)
+        if posVal < self.currVal and negVal < self.currVal:
+            goingForward = 0
+        elif posVal > negVal:
+            goingForward = 1
+        else:
+            goingForward = -1
+        self.safeMove(device, binFactor*goingForward)
+        self.currVal = self.checkVal()
+        return goingForward
 
     def checkSteps(self):
         """ Mostly unused function, checks how long it takes for each motor to go different distances."""
@@ -309,13 +369,25 @@ class MotorApplication:
         device.wait_move()
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
-        self.yaw_locs.append(yaw_loc)
-        self.pitch_locs.append(pitch_loc)
+        self.yaw_locs.append(yaw_loc*self.step_yaw)
+        self.pitch_locs.append(pitch_loc*self.step_pitch)
         # if self.window_revealed:
         #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
-        ct = datetime.datetime.now()
-        self.loc_log.write(f"{ct}, {yaw_loc}, {pitch_loc}, {self.globalVal},\n")
+        # ct = datetime.datetime.now()
+        # self.loc_log.write(f"{ct}, {yaw_loc*self.step_yaw}, {pitch_loc*self.step_pitch}, {self.globalVal},\n")
+
+    def safeMoveTo(self, device, move_loc, velocity=79475.19421577454):
+        curr_loc = device.get_position()
+        self.safeMove(device, move_loc - curr_loc, velocity=velocity)
+
         
+    def remember_location(self):
+        yaw_loc = self.deviceYaw.get_position()
+        pitch_loc = self.devicePitch.get_position()
+        self.checkVal()
+        ct = datetime.datetime.now()
+        self.loc_log.write(f"{ct}, {yaw_loc*self.step_yaw}, {pitch_loc*self.step_pitch}, {self.globalVal},\n")
+
     def home(self, velocity=79475.19421577454):
         """Go to some predefined home."""
         print(self.start_loc_yaw)
@@ -333,21 +405,21 @@ class MotorApplication:
         time.sleep(2)
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
-        self.yaw_locs.append(yaw_loc)
-        self.pitch_locs.append(pitch_loc)
+        self.yaw_locs.append(yaw_loc*self.step_yaw)
+        self.pitch_locs.append(pitch_loc*self.step_pitch)
         self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
         self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
         # if self.window_revealed:
         #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
 
-    def keepCentered(self, binFactor):
+    def keepCentered(self):
         """Currently, run adjustBeams if the signal drops below a specific value, but could constantly adjust the beam."""
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
             print(newVal, self.deviceYaw.get_position(), self.devicePitch.get_position())
             # if  newVal < self.currVal*self.deviationVal:
-            self.currVal = self.adjustBeams(binFactor)
+            self.currVal = self.adjustBeams()
 
     def plotField(self, binFactor):
         """ Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray """
@@ -355,7 +427,7 @@ class MotorApplication:
         print(self.deviceYaw.get_scale())
         print(self.devicePitch.get_scale_units())
         print(self.devicePitch.get_scale())
-        self.adjustBeams(20)
+        self.adjustBeams()
         newHomeYaw = self.deviceYaw.get_position()
         newHomePitch = self.devicePitch.get_position()
         print(f"yaw: {newHomeYaw}, pitch: {newHomePitch}")
@@ -366,12 +438,10 @@ class MotorApplication:
         print("pitch boundaries found")
         print(minYaw, maxYaw, minPitch, maxPitch)
         amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
-        # step_pitch = 4.88e-4
-        step_pitch = 7.234e-6
-        # step_yaw = 8.79e-4
-        step_yaw = 13.023e-6
         plt.imshow(amplitude_2d, cmap=cm.coolwarm, interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
         plt.colorbar()
+        plt.xlabel("yaw extent (degrees)")
+        plt.ylabel("pitch extent (degrees)")
 
         plt.savefig("spec_graph.png")
     
