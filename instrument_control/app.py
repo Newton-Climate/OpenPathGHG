@@ -1,9 +1,17 @@
 import sys
-import kdc_control
 import numpy as np
 import pyqtgraph as pg
 import time
-from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QPushButton
+from PyQt6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QLabel,
+    QLineEdit,
+    QVBoxLayout,
+    QHBoxLayout,
+    QWidget,
+    QPushButton,
+)
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from random import randint
@@ -13,39 +21,35 @@ from PyQt6 import QtCore, QtWidgets
 import threading
 from threading import Thread
 
+import kdc_control
 
-    # time.sleep(5)
-    # line1.setData(x*2, y/2)
-
-    # status = app.exec()
-    # sys.exit(status)
 
 class Worker(QObject):
-    def __init__(self, motorapp):
+    def __init__(self, beamapp):
         super(Worker, self).__init__()
-        self.motorapp = motorapp
-    
+        self.beamapp = beamapp
+
     finished = pyqtSignal()
 
     def keepCentered(self):
-        self.motorapp.keepCentered()
+        self.beamapp.keepCentered()
         self.finished.emit()
-    
+
     def plotField(self):
-        self.motorapp.plotField(200)
+        self.beamapp.plotField(200)
         self.finished.emit()
 
     def calibrateSampleBin(self):
-        self.motorapp.calibrateSampleBin()
+        self.beamapp.calibrateSampleBin()
         self.finished.emit()
-        
+
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    def __init__(self, motorapp):
+    def __init__(self, beamapp):
         super().__init__()
 
-        self.motorapp = motorapp
+        self.beamapp = beamapp
 
         self.setWindowTitle("Laser Feedback Control")
 
@@ -63,7 +67,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pg_layout = pg.GraphicsLayoutWidget()
 
         # Add subplots
-        self.graph1 = self.pg_layout.addPlot(row=0, col=0, title="Observed Modulated Signal Amplitude")
+        self.graph1 = self.pg_layout.addPlot(
+            row=0, col=0, title="Observed Modulated Signal Amplitude"
+        )
         self.graph2 = self.pg_layout.addPlot(row=0, col=1, title="Motor Position")
         self.graph1.setLabel("left", "Amplitude (Vrms)")
         self.graph1.setLabel("bottom", "Frequency")
@@ -71,10 +77,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.graph2.setLabel("bottom", "Yaw Offset (degrees)")
 
         self.pg_layout.setBackground("w")
-        pen = pg.mkPen(color=(255, 0, 0))
-
-        # self.time = list(range(10))
-        # self.temperature = [randint(20, 40) for _ in range(10)]
 
         # Show our layout holding multiple subplots
         layout1.addWidget(self.pg_layout)
@@ -86,12 +88,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mapField.clicked.connect(self.mapFieldClicked)
         self.calibrateDevice.clicked.connect(self.calibrateDeviceClicked)
 
-        # display_spectrum = motorapp.getSpectrum()[motorapp.start_index:motorapp.end_index]
-        # print(len(display_spectrum))
         self.update_plot1()
         self.update_plot2()
         print(threading.current_thread().name)
-
 
         time.sleep(5)
         # # Add a timer to simulate new temperature measurements
@@ -105,7 +104,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.keepAligned.text() == "Keep Beam Aligned":
 
             self.thread = QThread()
-            self.worker = Worker(self.motorapp)
+            self.worker = Worker(self.beamapp)
             self.worker.moveToThread(self.thread)
 
             self.thread.started.connect(self.worker.keepCentered)
@@ -118,19 +117,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
             self.keepAligned.setText("Keeping Aligned")
             self.mapField.setText("Cannot Map Field While Keeping Aligned")
-            self.calibrateDevice.setText("Cannot Calibrate Device While Keeping Aligned")
+            self.calibrateDevice.setText(
+                "Cannot Calibrate Device While Keeping Aligned"
+            )
             self.mapField.setEnabled(False)
             self.calibrateDevice.setEnabled(False)
         else:
             self.keepAligned.setText("Shutting Down Alignment Procedure")
             self.keepAligned.setEnabled(False)
-            self.motorapp.keepingCentered = False
-        
-    
+            self.beamapp.keepingCentered = False
+
     def mapFieldClicked(self):
 
         self.thread = QThread()
-        self.worker = Worker(self.motorapp)
+        self.worker = Worker(self.beamapp)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.plotField)
@@ -139,7 +139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
-        
+
         self.keepAligned.setText("Cannot Keep Aligned While Mapping Field")
         self.mapField.setText("Mapping Field")
         self.calibrateDevice.setText("Cannot Calibrate Device While Mapping Field")
@@ -147,13 +147,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mapField.setEnabled(False)
         self.calibrateDevice.setEnabled(False)
 
-        self.thread.finished.connect(
-                self.restoreButtons
-            )
+        self.thread.finished.connect(self.restoreButtons)
+
     def calibrateDeviceClicked(self):
 
         self.thread = QThread()
-        self.worker = Worker(self.motorapp)
+        self.worker = Worker(self.beamapp)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.calibrateSampleBin)
@@ -162,7 +161,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
-        
+
         self.keepAligned.setText("Cannot Keep Aligned While Calibrating Device")
         self.mapField.setText("Cannot Map Field While Calibrating Device")
         self.calibrateDevice.setText("Calibrating Device")
@@ -170,10 +169,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mapField.setEnabled(False)
         self.calibrateDevice.setEnabled(False)
 
-        self.thread.finished.connect(
-                self.restoreButtons
-            )
-        
+        self.thread.finished.connect(self.restoreButtons)
+
     def restoreButtons(self):
         self.keepAligned.setEnabled(True)
         self.mapField.setEnabled(True)
@@ -183,65 +180,62 @@ class MainWindow(QtWidgets.QMainWindow):
         self.calibrateDevice.setText("Calibrate Device")
 
     def update_plot1(self):
-        # print("update1")
-        # print(threading.current_thread().name)
-        spectrum = self.motorapp.export_spectrum
+        spectrum = self.beamapp.export_spectrum
         try:
-            self.line1.setData(self.motorapp.freq_range, spectrum)
+            self.line1.setData(self.beamapp.freq_range, spectrum)
 
         except:
-            # print("plotted")
-            self.line1 = self.graph1.plot(self.motorapp.freq_range, spectrum,
-                # pen=pen,
+            self.line1 = self.graph1.plot(
+                self.beamapp.freq_range,
+                spectrum,
             )
 
     def update_plot2(self):
-        # print("update2")
-        yaw_locs = self.motorapp.yaw_locs
-        pitch_locs = self.motorapp.pitch_locs
+        yaw_locs = self.beamapp.yaw_locs
+        pitch_locs = self.beamapp.pitch_locs
         try:
             self.line2.setData(yaw_locs, pitch_locs)
             self.dot.setData([yaw_locs[-1]], [pitch_locs[-1]], symbol="o")
-            # self.graph2.setXRange(start_yaw - yawBoundary, start_yaw + yawBoundary)
-            # self.graph2.setYRange(start_pitch - pitchBoundary, start_pitch + pitchBoundary)
-
         except:
-            self.line2 = self.graph2.plot(yaw_locs, pitch_locs,
-                # pen=pen,
+            self.line2 = self.graph2.plot(
+                yaw_locs,
+                pitch_locs,
             )
             self.dot = pg.ScatterPlotItem()
             self.dot.addPoints([yaw_locs[-1]], [pitch_locs[-1]], symbol="o")
             self.graph2.addItem(self.dot)
 
-    # def update_plot(self):
-    #     self.time = self.time[1:]
-    #     self.time.append(self.time[-1] + 1)
-    #     self.temperature = self.temperature[1:]
-    #     self.temperature.append(randint(20, 40))
-    #     self.line1.setData(self.time, self.temperature)
 
-def revealWindow(currPeaked):
-    with open("data/loc_coords.txt", "a") as loc_log:
-        with kdc_control.MotorApplication(currPeaked=currPeaked, serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch, loc_log=loc_log) as motorapp:
-            app = QtWidgets.QApplication([])
-            main = MainWindow(motorapp=motorapp)
-            main.show()
-            motorapp.windowRevealed(main)
-            app.exec()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     # serialNoYaw = "27006315"
     # serialNoPitch = "27006283"
     # start_yaw = -40867
     # start_pitch = -97862
     serialNoYaw = "27250209"
     serialNoPitch = "27250140"
-    start_yaw = 218523 #(Lab)
-    start_pitch = 241626 #(Lab)
+    start_yaw = 218523  # (Lab)
+    start_pitch = 241626  # (Lab)
     # start_yaw = 21111
     # start_pitch = -92993
     yawBoundary = 2000
     pitchBoundary = 1000
     deviationVal = 0.1
     binFactor = 200
-    revealWindow(currPeaked=False)
+    currPeaked = False
+    with open("data/loc_coords.txt", "a", encoding="utf-8") as loc_log:
+        with kdc_control.BeamAligner(
+            currPeaked=currPeaked,
+            serialNoYaw=serialNoYaw,
+            serialNoPitch=serialNoPitch,
+            yawBoundary=yawBoundary,
+            pitchBoundary=pitchBoundary,
+            deviationVal=deviationVal,
+            startYaw=start_yaw,
+            startPitch=start_pitch,
+            loc_log=loc_log,
+        ) as newbeamapp:
+            app = QtWidgets.QApplication([])
+            main = MainWindow(beamapp=newbeamapp)
+            main.show()
+            newbeamapp.windowRevealed(main)
+            app.exec()

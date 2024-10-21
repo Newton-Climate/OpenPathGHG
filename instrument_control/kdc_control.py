@@ -1,6 +1,7 @@
 """
 Many imports
 """
+
 from pylablib.devices import Thorlabs
 import ft232
 import time
@@ -14,7 +15,6 @@ import scipy
 import matplotlib.pyplot as plt
 import csv
 import app
-import app2
 import datetime
 from statistics import mean, stdev
 import math
@@ -30,29 +30,45 @@ Import files from local system
 dwf = ctypes.cdll.dwf
 
 HERE = Path(__file__).parent
-path.append(str(HERE / 'py/'))
-path.append('py')
+path.append(str(HERE / "py/"))
+path.append("py")
 # import dwfconstants as constants
-from WF_SDK import device, scope, wavegen, error   # import instruments
+from WF_SDK import device, scope, wavegen, error  # import instruments
 
 modulename = "WF_SDK"
 if modulename not in sys.modules:
     print(f"You have not imported the {modulename} module")
 
+
 class data:
-    """ stores the sampling frequency and the buffer size for Digilent to use """
+    """stores the sampling frequency and the buffer size for Digilent to use"""
+
     sampling_frequency = 8.192e04
     buffer_size = 8192
     total_time = 0.1
 
-class MotorApplication:
+
+class BeamAligner:
     """
     Handles motor control and spectrum observation.
     """
+
     def __enter__(self):
-        """Allows for motor, digilent to be properly spun down and closed using __exit__ even if program is interrupted. """
+        """Allows for motor, digilent to be properly spun down and closed using __exit__ even if program is interrupted."""
         return self
-    def __init__(self, currPeaked, serialNoYaw, serialNoPitch, yawBoundary, pitchBoundary, deviationVal, startYaw, startPitch, loc_log):
+
+    def __init__(
+        self,
+        currPeaked,
+        serialNoYaw,
+        serialNoPitch,
+        yawBoundary,
+        pitchBoundary,
+        deviationVal,
+        startYaw,
+        startPitch,
+        loc_log,
+    ):
         """Initialize monitoring setup.
 
         Keyword arguments:
@@ -70,11 +86,12 @@ class MotorApplication:
         # step_yaw = 8.79e-4
         self.step_yaw = 13.023e-6
 
-
         self.deviationVal = deviationVal
         self.keepingCentered = False
         self.loc_log = loc_log
-        self.window_revealed = False # GUI has not been set up yet, so don't display any movements
+        self.window_revealed = (
+            False  # GUI has not been set up yet, so don't display any movements
+        )
 
         """ Initialize motors and move them to manually input beam center."""
         self.deviceYaw = Thorlabs.KinesisMotor(serialNoYaw)
@@ -87,62 +104,85 @@ class MotorApplication:
         if not currPeaked:
             self.recenterHome(startYaw, startPitch)
         else:
-            self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
-        print(f'pos: {self.deviceYaw.get_position()}, {self.devicePitch.get_position()}')
+            self.recenterHome(
+                self.deviceYaw.get_position(), self.devicePitch.get_position()
+            )
+        print(
+            f"pos: {self.deviceYaw.get_position()}, {self.devicePitch.get_position()}"
+        )
 
         """ Run digilent """
         self.device_data = device.open()
         print("digilent device opened")
-        scope.open(self.device_data, sampling_frequency=8.192e04, buffer_size=8192, amplitude_range=50)
-        scope.trigger(self.device_data, enable=False, source=scope.trigger_source.analog, channel=1, level=0)
+        scope.open(
+            self.device_data,
+            sampling_frequency=8.192e04,
+            buffer_size=8192,
+            amplitude_range=50,
+        )
+        scope.trigger(
+            self.device_data,
+            enable=False,
+            source=scope.trigger_source.analog,
+            channel=1,
+            level=0,
+        )
         print("scope set up")
 
         """Get a spectrum, and send it to GUI to display"""
-        self.nyq_freq = data.sampling_frequency/2 # Nyquist frequency determines bounds of FFT
+        self.nyq_freq = (
+            data.sampling_frequency / 2
+        )  # Nyquist frequency determines bounds of FFT
         buffer = scope.record(self.device_data, channel=1)
         print(f"recorded, len {len(buffer)}")
         self.total_samples = len(buffer)
-        self.freq_range = np.linspace(0, self.nyq_freq, int(self.total_samples/2)+1)
+        self.freq_range = np.linspace(0, self.nyq_freq, int(self.total_samples / 2) + 1)
         self.target_freq = 9e03
-        self.target_index = self.target_freq*len(self.freq_range)/self.nyq_freq
-        self.start_index = int(self.target_index*0.9)
-        print(f'start index: {self.start_index}')
-        self.end_index = int(self.target_index*1.1)
-        print(f'end index: {self.end_index}')
-        self.freq_range = self.freq_range[self.start_index:self.end_index]
+        self.target_index = self.target_freq * len(self.freq_range) / self.nyq_freq
+        self.start_index = int(self.target_index * 0.9)
+        print(f"start index: {self.start_index}")
+        self.end_index = int(self.target_index * 1.1)
+        print(f"end index: {self.end_index}")
+        self.freq_range = self.freq_range[self.start_index : self.end_index]
         currVal, _ = self.checkSpectrum()
         self.initialPeakVal = currVal
-        self.valBuffer = [(0, 0, 0)]*50
-        self.addToValBuffer(self.initialPeakVal, self.deviceYaw.get_position(), self.devicePitch.get_position())
+        self.valBuffer = [(0, 0, 0)] * 50
+        self.addToValBuffer(
+            self.initialPeakVal,
+            self.deviceYaw.get_position(),
+            self.devicePitch.get_position(),
+        )
         print(self.valBuffer)
 
     def addToValBuffer(self, amplitude, loc_yaw, loc_pitch):
         self.valBuffer.pop(0)
         self.valBuffer.append((amplitude, loc_yaw, loc_pitch))
-    
+
     def getMaxBuffer(self):
         return max(self.valBuffer, key=lambda valTuple: valTuple[0])
 
     def calibrateSampleBin(self):
         # self.calibrateSampleSize()
         self.adjustBeams()
-        self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
+        self.recenterHome(
+            self.deviceYaw.get_position(), self.devicePitch.get_position()
+        )
         self.calibrateBinFactor()
         self.adjustBeams()
-        
+
     def calibrateSampleSize(self):
         data_arr = []
         for i in range(1000):
             print(i)
-            val = np.max(self.getSpectrum()[self.start_index:self.end_index])
+            val = np.max(self.getSpectrum()[self.start_index : self.end_index])
             data_arr.append(val)
-        print(f'average: {mean(data_arr)}, stdev: {stdev(data_arr)}')
-        moe = mean(data_arr)/20
+        print(f"average: {mean(data_arr)}, stdev: {stdev(data_arr)}")
+        moe = mean(data_arr) / 20
         zscore = 1.96
-        n = (zscore*stdev(data_arr)/moe)**2
+        n = (zscore * stdev(data_arr) / moe) ** 2
         self.sample_size = int(math.ceil(n))
-        print(f'n is {n}')
-    
+        print(f"n is {n}")
+
     def calibrateBinFactor(self):
         self.binFactorYaw = 1
         self.binFactorPitch = 1
@@ -151,42 +191,43 @@ class MotorApplication:
         starting_loc_yaw = self.deviceYaw.get_position()
         starting_loc_pitch = self.devicePitch.get_position()
         goingForwardYaw = 1
-        print(f'going forward yaw: {goingForwardYaw}')
+        print(f"going forward yaw: {goingForwardYaw}")
         while not hasMovedEnough:
-            self.safeMove(self.deviceYaw, goingForwardYaw*self.binFactorYaw)
+            self.safeMove(self.deviceYaw, goingForwardYaw * self.binFactorYaw)
             newVal = self.checkCalibrationVal()
             self.binFactorYaw *= 2
-            percent_diff = abs(newVal/currVal - 1)
-            print(f'percent diff: {percent_diff}')
-            hasMovedEnough = abs(newVal/currVal - 1) > .05
+            percent_diff = abs(newVal / currVal - 1)
+            print(f"percent diff: {percent_diff}")
+            hasMovedEnough = abs(newVal / currVal - 1) > 0.05
         self.binFactorYaw /= 2
-        print(f'bin factor yaw: {self.binFactorYaw}')
+        print(f"bin factor yaw: {self.binFactorYaw}")
         self.safeMoveTo(self.deviceYaw, starting_loc_yaw)
         hasMovedEnough = False
         goingForwardPitch = 1
-        print(f'going forward pitch: {goingForwardPitch}')
+        print(f"going forward pitch: {goingForwardPitch}")
         while not hasMovedEnough:
-            self.safeMove(self.devicePitch, goingForwardPitch*self.binFactorPitch)
+            self.safeMove(self.devicePitch, goingForwardPitch * self.binFactorPitch)
             newVal = self.checkCalibrationVal()
             self.binFactorPitch *= 2
-            percent_diff = abs(newVal/currVal - 1)
-            print(f'percent diff: {percent_diff}')
-            hasMovedEnough = abs(newVal/currVal - 1) > .05
+            percent_diff = abs(newVal / currVal - 1)
+            print(f"percent diff: {percent_diff}")
+            hasMovedEnough = abs(newVal / currVal - 1) > 0.05
         self.binFactorPitch /= 2
-        print(f'bin factor pitch: {self.binFactorPitch}')
+        print(f"bin factor pitch: {self.binFactorPitch}")
         self.safeMoveTo(self.devicePitch, starting_loc_pitch)
 
-
     def windowRevealed(self, window):
-        """ Called from GUI when it is ready to display. No updates will be made until the window is revealed. """
+        """Called from GUI when it is ready to display. No updates will be made until the window is revealed."""
         self.main_window = window
         self.window_revealed = True
 
     def recenterHome(self, newYaw, newPitch):
-        """ Recenter home and return home. """
-        
-        self.deviceYaw.setup_limit_switch(sw_kind='ignore') # Not using limit switches for testing, as they quietly stop the motor when the limit switch is reached, not sure how to tell when that happens.
-        self.devicePitch.setup_limit_switch(sw_kind='ignore')
+        """Recenter home and return home."""
+
+        self.deviceYaw.setup_limit_switch(
+            sw_kind="ignore"
+        )  # Not using limit switches for testing, as they quietly stop the motor when the limit switch is reached, not sure how to tell when that happens.
+        self.devicePitch.setup_limit_switch(sw_kind="ignore")
         # self.deviceYaw.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
         # self.devicePitch.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
         self.start_loc_yaw = newYaw
@@ -194,15 +235,15 @@ class MotorApplication:
         self.home()
 
     def getSpectrum(self):
-        """ Get a single spectrum measurement from the digilent, then plot it if the GUI is revealed. """
+        """Get a single spectrum measurement from the digilent, then plot it if the GUI is revealed."""
         buffer = scope.record(self.device_data, channel=1)
         self.total_samples = len(buffer)
-        spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
-        self.export_spectrum = spectrum[self.start_index:self.end_index]
+        spectrum = np.abs(scipy.fft.rfft(buffer)) * 2 / self.total_samples
+        self.export_spectrum = spectrum[self.start_index : self.end_index]
         return spectrum
 
     def checkSpectrum(self):
-        """ Run getSpectrum 10 times, average them and denoise, then extract the peak and return """
+        """Run getSpectrum 10 times, average them and denoise, then extract the peak and return"""
         spectrums = []
         for _ in range(self.sample_size):
             spectrum = self.getSpectrum()
@@ -214,32 +255,34 @@ class MotorApplication:
         # noise_level = np.mean(noisy_spectrum)
         # denoised_spectrum = (spectrum - noise_level) #Note: Could do more sophisticated denoising, right now just subtracting avg background
         denoised_spectrum = spectrum
-        graph_spectrum = spectrum[self.start_index:self.end_index]
-        return np.max(denoised_spectrum[self.start_index:self.end_index]), graph_spectrum
-
+        graph_spectrum = spectrum[self.start_index : self.end_index]
+        return (
+            np.max(denoised_spectrum[self.start_index : self.end_index]),
+            graph_spectrum,
+        )
 
     def checkVal(self):
-        """ Just get the amplitude of the 9kHz modulation peak from checkSpectrum. """
+        """Just get the amplitude of the 9kHz modulation peak from checkSpectrum."""
         currValReturn, _ = self.checkSpectrum()
         self.globalVal = currValReturn
         return currValReturn
-    
+
     def checkCalibrationVal(self):
         vals = []
         for _ in range(10):
             vals.append(self.checkVal())
         return mean(vals)
-    
+
     def waitForFog(self):
         currVal = self.checkVal()
-        while currVal < 0.5*self.initialPeakVal:
+        while currVal < 0.5 * self.initialPeakVal:
             currVal = self.checkVal()
             time.sleep(20)
         self.safeMoveTo(self.deviceYaw, self.maxLocYaw)
         self.safeMoveTo(self.devicePitch, self.maxLocPitch)
 
     def adjustBeams(self):
-        """ Call adjustBeam on each of yaw and pitch separately (peak them up). """
+        """Call adjustBeam on each of yaw and pitch separately (peak them up)."""
         yawVal = self.adjustBeam(self.deviceYaw, self.binFactorYaw)
         pitchVal = self.adjustBeam(self.devicePitch, self.binFactorPitch)
         newVal = self.checkVal()
@@ -255,19 +298,19 @@ class MotorApplication:
         self.remember_location()
 
     def adjustBeam(self, device, startingBinFactor):
-        """ Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
+        """Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
         binFactor = startingBinFactor
         goingForward = self.findBetterDirection(device, startingBinFactor)
         max_loc = device.get_position()
         currVal = self.checkVal()
 
         if goingForward != 0:
-            self.safeMove(device, goingForward*binFactor)
+            self.safeMove(device, goingForward * binFactor)
             newVal = self.checkVal()
             while newVal >= currVal:
                 currVal = newVal
                 max_loc = device.get_position()
-                self.safeMove(device, goingForward*binFactor)
+                self.safeMove(device, goingForward * binFactor)
                 binFactor *= 2
                 newVal = self.checkVal()
             goingForward *= -1
@@ -275,7 +318,7 @@ class MotorApplication:
             binFactor /= 2
             while binFactor > startingBinFactor:
                 binFactor /= 2
-                self.safeMove(device, goingForward*binFactor)
+                self.safeMove(device, goingForward * binFactor)
                 newVal = self.checkVal()
                 goingForward = nextReverse * goingForward
                 if newVal > currVal:
@@ -284,23 +327,23 @@ class MotorApplication:
                     max_loc = device.get_position()
                 else:
                     nextReverse = 1
-            self.safeMove(device, binFactor*goingForward)
+            self.safeMove(device, binFactor * goingForward)
             newVal = self.checkVal()
             if newVal < currVal:
                 binFactor /= 2
                 goingForward *= nextReverse
-                self.safeMove(device, binFactor*goingForward)
+                self.safeMove(device, binFactor * goingForward)
             # Check if we should move back to greatest magnitude position
             newVal = self.checkVal()
             if newVal > currVal:
                 max_loc = device.get_position()
         self.safeMoveTo(device, max_loc)
-    
+
     def findBetterDirection(self, device, binFactor):
         currVal = self.checkVal()
         self.safeMove(device, binFactor)
         posVal = self.checkVal()
-        self.safeMove(device, -2*binFactor)
+        self.safeMove(device, -2 * binFactor)
         negVal = self.checkVal()
         self.safeMove(device, binFactor)
         if posVal < currVal and negVal < currVal:
@@ -309,12 +352,12 @@ class MotorApplication:
             goingForward = 1
         else:
             goingForward = -1
-        self.safeMove(device, binFactor*goingForward)
+        self.safeMove(device, binFactor * goingForward)
         currVal = self.checkVal()
         return goingForward
 
     def checkSteps(self):
-        """ Mostly unused function, checks how long it takes for each motor to go different distances."""
+        """Mostly unused function, checks how long it takes for each motor to go different distances."""
         totalIterations = 200
 
         watchYawStart = time.time()
@@ -336,21 +379,28 @@ class MotorApplication:
         print(f"Avg 10x Yaw Time: {watchYawTenTotal/totalIterations}")
 
     def findBoundaries(self, device, binFactor):
-        """ Before plotting the field, find the boundaries at which the signal drops below a specified value in both yaw and pitch.
+        """Before plotting the field, find the boundaries at which the signal drops below a specified value in both yaw and pitch.
         Go to extrema in all 4 directions, and return the number of steps of binFactor length required to get to those extrema.
-        """
+
+        Args:
+            device (KinesisMotor): Either a yaw or pitch motor which will be adjusted
+            binFactor (int): How many motor steps each step of the controller will take (minimum resolution)
+
+        Returns:
+            int, int: the number of steps left and right to reach the boundaries of the field
+        """        
         currVal = self.checkVal()
         newVal = currVal
         offset_max = 0
         offset_min = 0
         starting_loc = device.get_position()
         print(starting_loc, self.start_loc_yaw, self.start_loc_pitch)
-        while newVal >= currVal*self.deviationVal:
+        while newVal >= currVal * self.deviationVal:
             self.safeMove(device, binFactor)
             print(device.get_position())
             time.sleep(0.5)
             newVal = self.checkVal()
-            print(f'currval: {currVal}, newval: {newVal}')
+            print(f"currval: {currVal}, newval: {newVal}")
             offset_max += 1
         print(f"started at {starting_loc}, now at {device.get_position()}")
         self.home()
@@ -358,55 +408,56 @@ class MotorApplication:
         newVal = self.checkVal()
         print(f"new val: {newVal}")
         currVal = newVal
-        while newVal >= currVal*self.deviationVal:
+        while newVal >= currVal * self.deviationVal:
             self.safeMove(device, -binFactor)
             print(device.get_position())
             time.sleep(0.5)
             newVal = self.checkVal()
-            print(f'currval: {currVal}, newval: {newVal}')
+            print(f"currval: {currVal}, newval: {newVal}")
             offset_min += 1
         self.home()
         newVal = self.checkVal()
-        print(offset_min*binFactor, offset_max*binFactor)
-        return offset_min*binFactor, offset_max*binFactor
+        print(offset_min * binFactor, offset_max * binFactor)
+        return offset_min * binFactor, offset_max * binFactor
 
     def getOrientationArray(self, minYaw, maxYaw, minPitch, maxPitch, binFactor):
         """Given yaw and pitch extrema from findBoundaries, step left to right, then top to bottom, graphin amplitude at each point."""
         self.safeMove(self.deviceYaw, maxYaw)
         self.safeMove(self.devicePitch, maxPitch)
-        yawDiff = int((minYaw + maxYaw)/binFactor)
-        pitchDiff = int((minPitch + maxPitch)/binFactor)
+        yawDiff = int((minYaw + maxYaw) / binFactor)
+        pitchDiff = int((minPitch + maxPitch) / binFactor)
         amplitude_2d = np.ones((pitchDiff, yawDiff))
         print(maxYaw, maxPitch, minYaw, minPitch)
-        for i in range (pitchDiff):
+        for i in range(pitchDiff):
             self.safeMove(self.devicePitch, -binFactor)
             for j in range(yawDiff):
                 self.safeMove(self.deviceYaw, -binFactor)
                 amplitude_2d[i, j] = self.checkVal()
                 print(i, j)
-            self.safeMove(self.deviceYaw, yawDiff*binFactor)
+            self.safeMove(self.deviceYaw, yawDiff * binFactor)
         return amplitude_2d
 
     def safeMove(self, device, amount, velocity=79475.19421577454):
-        """ A move function that also logs locations and displays in the GUI, then waits for the move to complete. """
+        """A move function that also logs locations and displays in the GUI, then waits for the move to complete."""
         device.move_by(amount)
         device.wait_move()
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
-        self.yaw_locs.append(yaw_loc*self.step_yaw)
-        self.pitch_locs.append(pitch_loc*self.step_pitch)
+        self.yaw_locs.append(yaw_loc * self.step_yaw)
+        self.pitch_locs.append(pitch_loc * self.step_pitch)
 
     def safeMoveTo(self, device, move_loc, velocity=79475.19421577454):
         curr_loc = device.get_position()
         self.safeMove(device, move_loc - curr_loc, velocity=velocity)
 
-        
     def remember_location(self):
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
         self.checkVal()
         ct = datetime.datetime.now()
-        self.loc_log.write(f"{ct}, {yaw_loc*self.step_yaw}, {pitch_loc*self.step_pitch}, {self.globalVal},\n")
+        self.loc_log.write(
+            f"{ct}, {yaw_loc*self.step_yaw}, {pitch_loc*self.step_pitch}, {self.globalVal},\n"
+        )
 
     def home(self, velocity=79475.19421577454):
         """Go to some predefined home."""
@@ -421,14 +472,14 @@ class MotorApplication:
         self.devicePitch.wait_move()
         loc_yaw = self.deviceYaw.get_position()
         loc_pitch = self.devicePitch.get_position()
-        print(loc_yaw, loc_yaw*self.step_yaw)
-        print(loc_pitch, loc_pitch*self.step_pitch)
+        print(loc_yaw, loc_yaw * self.step_yaw)
+        print(loc_pitch, loc_pitch * self.step_pitch)
         print("home sweet home")
         time.sleep(2)
         yaw_loc = self.deviceYaw.get_position()
         pitch_loc = self.devicePitch.get_position()
-        self.yaw_locs.append(yaw_loc*self.step_yaw)
-        self.pitch_locs.append(pitch_loc*self.step_pitch)
+        self.yaw_locs.append(yaw_loc * self.step_yaw)
+        self.pitch_locs.append(pitch_loc * self.step_pitch)
         self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
         self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
 
@@ -437,14 +488,17 @@ class MotorApplication:
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
-            if newVal < 0.5*self.initialPeakVal:
+            if newVal < 0.5 * self.initialPeakVal:
                 self.waitForFog()
-            print(newVal, self.deviceYaw.get_position()*self.step_yaw, self.devicePitch.get_position()*self.step_pitch)
+            print(
+                newVal,
+                self.deviceYaw.get_position() * self.step_yaw,
+                self.devicePitch.get_position() * self.step_pitch,
+            )
             self.adjustBeams()
-        
 
     def plotField(self, binFactor):
-        """ Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray """
+        """Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray"""
         print(self.deviceYaw.get_scale_units())
         print(self.deviceYaw.get_scale())
         print(self.devicePitch.get_scale_units())
@@ -459,19 +513,30 @@ class MotorApplication:
         minPitch, maxPitch = self.findBoundaries(self.devicePitch, binFactor)
         print("pitch boundaries found")
         print(minYaw, maxYaw, minPitch, maxPitch)
-        amplitude_2d = self.getOrientationArray(minYaw, maxYaw, minPitch, maxPitch, binFactor)
-        plt.imshow(amplitude_2d, cmap=cm.coolwarm, interpolation='nearest', extent=[-minYaw*step_yaw, maxYaw*step_yaw, -minPitch*step_pitch, maxPitch*step_pitch])
+        amplitude_2d = self.getOrientationArray(
+            minYaw, maxYaw, minPitch, maxPitch, binFactor
+        )
+        plt.imshow(
+            amplitude_2d,
+            cmap=cm.coolwarm,
+            interpolation="nearest",
+            extent=[
+                -minYaw * self.step_yaw,
+                maxYaw * self.step_yaw,
+                -minPitch * self.step_pitch,
+                maxPitch * self.step_pitch,
+            ],
+        )
         plt.colorbar()
         plt.xlabel("yaw extent (degrees)")
         plt.ylabel("pitch extent (degrees)")
 
         plt.savefig("spec_graph.png")
-    
-    
+
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        """Companion to __enter__. Safely shuts down each device whenever program is stopped/MotorApplication is closed."""
-        self.deviceYaw.setup_limit_switch(sw_kind='ignore')
-        self.devicePitch.setup_limit_switch(sw_kind='ignore')
+        """Companion to __enter__. Safely shuts down each device whenever program is stopped/BeamAligner is closed."""
+        self.deviceYaw.setup_limit_switch(sw_kind="ignore")
+        self.devicePitch.setup_limit_switch(sw_kind="ignore")
         self.deviceYaw.stop()
         self.devicePitch.stop()
         self.deviceYaw.close()
