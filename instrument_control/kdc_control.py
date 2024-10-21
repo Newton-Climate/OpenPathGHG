@@ -69,6 +69,8 @@ class MotorApplication:
         self.step_pitch = 7.234e-6
         # step_yaw = 8.79e-4
         self.step_yaw = 13.023e-6
+        # 21040
+        # -92643
 
 
         self.deviationVal = deviationVal
@@ -113,12 +115,23 @@ class MotorApplication:
         # self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
         self.freq_range = self.freq_range[self.start_index:self.end_index]
         # self.spectrum = self.spectrum[self.start_index:self.end_index]
-        self.currVal, _ = self.checkSpectrum()
+        currVal, _ = self.checkSpectrum()
+        self.initialPeakVal = currVal
+        self.valBuffer = [(0, 0, 0)]*50
+        self.addToValBuffer(self.initialPeakVal, self.deviceYaw.get_position(), self.devicePitch.get_position())
+        print(self.valBuffer)
+
+    def addToValBuffer(self, amplitude, loc_yaw, loc_pitch):
+        self.valBuffer.pop(0)
+        self.valBuffer.append((amplitude, loc_yaw, loc_pitch))
+    
+    def getMaxBuffer(self):
+        return max(self.valBuffer, key=lambda valTuple: valTuple[0])
 
     def calibrateSampleBin(self):
         # self.calibrateSampleSize()
-        # self.adjustBeams()
-        # self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
+        self.adjustBeams()
+        self.recenterHome(self.deviceYaw.get_position(), self.devicePitch.get_position())
         self.calibrateBinFactor()
         self.adjustBeams()
         
@@ -139,19 +152,21 @@ class MotorApplication:
         self.binFactorYaw = 1
         self.binFactorPitch = 1
         hasMovedEnough = False
-        self.currVal = self.checkVal()
+        currVal = self.checkVal()
+        starting_loc_yaw = self.deviceYaw.get_position()
+        starting_loc_pitch = self.devicePitch.get_position()
         goingForwardYaw = 1
         print(f'going forward yaw: {goingForwardYaw}')
         while not hasMovedEnough:
             self.safeMove(self.deviceYaw, goingForwardYaw*self.binFactorYaw)
             newVal = self.checkCalibrationVal()
             self.binFactorYaw *= 2
-            percent_diff = abs(newVal/self.currVal - 1)
+            percent_diff = abs(newVal/currVal - 1)
             print(f'percent diff: {percent_diff}')
-            hasMovedEnough = abs(newVal/self.currVal - 1) > .05
+            hasMovedEnough = abs(newVal/currVal - 1) > .05
         self.binFactorYaw /= 2
         print(f'bin factor yaw: {self.binFactorYaw}')
-        self.safeMove(self.deviceYaw, goingForwardYaw*(-self.binFactorYaw + 1))
+        self.safeMoveTo(self.deviceYaw, starting_loc_yaw)
         hasMovedEnough = False
         goingForwardPitch = 1
         print(f'going forward pitch: {goingForwardPitch}')
@@ -159,12 +174,12 @@ class MotorApplication:
             self.safeMove(self.devicePitch, goingForwardPitch*self.binFactorPitch)
             newVal = self.checkCalibrationVal()
             self.binFactorPitch *= 2
-            percent_diff = abs(newVal/self.currVal - 1)
+            percent_diff = abs(newVal/currVal - 1)
             print(f'percent diff: {percent_diff}')
-            hasMovedEnough = abs(newVal/self.currVal - 1) > .05
+            hasMovedEnough = abs(newVal/currVal - 1) > .05
         self.binFactorPitch /= 2
         print(f'bin factor pitch: {self.binFactorPitch}')
-        self.safeMove(self.devicePitch, goingForwardPitch*(-self.binFactorPitch + 1))
+        self.safeMoveTo(self.devicePitch, starting_loc_pitch)
 
 
     def windowRevealed(self, window):
@@ -189,8 +204,6 @@ class MotorApplication:
         self.total_samples = len(buffer)
         spectrum = np.abs(scipy.fft.rfft(buffer))*2/self.total_samples
         self.export_spectrum = spectrum[self.start_index:self.end_index]
-        # if self.window_revealed:
-        #     self.main_window.update_plot1(spectrum[self.start_index:self.end_index])
         return spectrum
 
     def checkSpectrum(self):
@@ -221,66 +234,88 @@ class MotorApplication:
         for _ in range(10):
             vals.append(self.checkVal())
         return mean(vals)
+    
+    def waitForFog(self):
+        currVal = self.checkVal()
+        while currVal < 0.5*self.initialPeakVal:
+            currVal = self.checkVal()
+            time.sleep(20)
+        self.safeMoveTo(self.deviceYaw, self.maxLocYaw)
+        self.safeMoveTo(self.devicePitch, self.maxLocPitch)
 
     def adjustBeams(self):
         """ Call adjustBeam on each of yaw and pitch separately (peak them up). """
         yawVal = self.adjustBeam(self.deviceYaw, self.binFactorYaw)
         pitchVal = self.adjustBeam(self.devicePitch, self.binFactorPitch)
-        return yawVal, pitchVal
+        newVal = self.checkVal()
+        newYaw = self.deviceYaw.get_position()
+        newPitch = self.devicePitch.get_position()
+        self.addToValBuffer(newVal, newYaw, newPitch)
+        maxVal, maxYaw, maxPitch = self.getMaxBuffer()
+        self.safeMoveTo(self.deviceYaw, maxYaw)
+        self.safeMoveTo(self.devicePitch, maxPitch)
+        if self.checkVal() < newVal:
+            self.safeMoveTo(self.deviceYaw, newYaw)
+            self.safeMoveTo(self.devicePitch, newPitch)
+        self.remember_location()
 
     def adjustBeam(self, device, startingBinFactor):
         """ Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
-        # self.currVal = self.checkVal()
-        # newVal = self.currVal
-        # goingForward = random.randint(0, 1)*2-1
-        # print(f"flipped a {goingForward}")
         binFactor = startingBinFactor
         goingForward = self.findBetterDirection(device, startingBinFactor)
-        binFactor *= 2
+        max_loc = device.get_position()
+        currVal = self.checkVal()
+
         if goingForward != 0:
+            self.safeMove(device, goingForward*binFactor)
             newVal = self.checkVal()
-            while newVal >= self.currVal:
-                self.currVal = newVal
+            while newVal >= currVal:
+                currVal = newVal
+                max_loc = device.get_position()
                 self.safeMove(device, goingForward*binFactor)
                 binFactor *= 2
                 newVal = self.checkVal()
             goingForward *= -1
             nextReverse = 1
+            binFactor /= 2
             while binFactor > startingBinFactor:
                 binFactor /= 2
                 self.safeMove(device, goingForward*binFactor)
                 newVal = self.checkVal()
                 goingForward = nextReverse * goingForward
-                if newVal > self.currVal:
-                    self.currVal = newVal
+                if newVal > currVal:
+                    currVal = newVal
                     nextReverse = -1
+                    max_loc = device.get_position()
                 else:
                     nextReverse = 1
             self.safeMove(device, binFactor*goingForward)
             newVal = self.checkVal()
-            if newVal < self.currVal:
+            if newVal < currVal:
+                binFactor /= 2
                 goingForward *= nextReverse
                 self.safeMove(device, binFactor*goingForward)
-
-        newVal = self.checkVal()
-        self.remember_location()
-        return newVal
+            # Check if we should move back to greatest magnitude position
+            newVal = self.checkVal()
+            if newVal > currVal:
+                max_loc = device.get_position()
+        self.safeMoveTo(device, max_loc)
     
     def findBetterDirection(self, device, binFactor):
-        self.currVal = self.checkVal()
+        currVal = self.checkVal()
         self.safeMove(device, binFactor)
         posVal = self.checkVal()
         self.safeMove(device, -2*binFactor)
         negVal = self.checkVal()
         self.safeMove(device, binFactor)
-        if posVal < self.currVal and negVal < self.currVal:
+        if posVal < currVal and negVal < currVal:
             goingForward = 0
         elif posVal > negVal:
             goingForward = 1
         else:
             goingForward = -1
         self.safeMove(device, binFactor*goingForward)
-        self.currVal = self.checkVal()
+        currVal = self.checkVal()
         return goingForward
 
     def checkSteps(self):
@@ -309,40 +344,34 @@ class MotorApplication:
         """ Before plotting the field, find the boundaries at which the signal drops below a specified value in both yaw and pitch.
         Go to extrema in all 4 directions, and return the number of steps of binFactor length required to get to those extrema.
         """
-        self.currVal = self.checkVal()
-        newVal = self.currVal
+        currVal = self.checkVal()
+        newVal = currVal
         offset_max = 0
         offset_min = 0
         starting_loc = device.get_position()
         print(starting_loc, self.start_loc_yaw, self.start_loc_pitch)
-        while newVal >= self.currVal*self.deviationVal:
+        while newVal >= currVal*self.deviationVal:
             self.safeMove(device, binFactor)
             print(device.get_position())
             time.sleep(0.5)
             newVal = self.checkVal()
-            print(f'currval: {self.currVal}, newval: {newVal}')
+            print(f'currval: {currVal}, newval: {newVal}')
             offset_max += 1
         print(f"started at {starting_loc}, now at {device.get_position()}")
         self.home()
         print(f"moved back to {device.get_position()}")
         newVal = self.checkVal()
         print(f"new val: {newVal}")
-        # if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
-        #     print("exception, your honor")
-        #     raise Exception(f"motor hasn't returned sufficiently to origin going up, amplitude is now {newVal/self.currVal} of previous")
-        self.currVal = newVal
-        while newVal >= self.currVal*self.deviationVal:
+        currVal = newVal
+        while newVal >= currVal*self.deviationVal:
             self.safeMove(device, -binFactor)
             print(device.get_position())
             time.sleep(0.5)
             newVal = self.checkVal()
-            print(f'currval: {self.currVal}, newval: {newVal}')
+            print(f'currval: {currVal}, newval: {newVal}')
             offset_min += 1
         self.home()
         newVal = self.checkVal()
-        # if 0.8 > newVal/self.currVal or newVal/self.currVal > 1.2:
-        #     print("exception, your honor")
-        #     raise Exception(f"motor hasn't returned sufficiently to origin going down, amplitude is now {newVal/self.currVal} of previous")
         print(offset_min*binFactor, offset_max*binFactor)
         return offset_min*binFactor, offset_max*binFactor
 
@@ -371,10 +400,6 @@ class MotorApplication:
         pitch_loc = self.devicePitch.get_position()
         self.yaw_locs.append(yaw_loc*self.step_yaw)
         self.pitch_locs.append(pitch_loc*self.step_pitch)
-        # if self.window_revealed:
-        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
-        # ct = datetime.datetime.now()
-        # self.loc_log.write(f"{ct}, {yaw_loc*self.step_yaw}, {pitch_loc*self.step_pitch}, {self.globalVal},\n")
 
     def safeMoveTo(self, device, move_loc, velocity=79475.19421577454):
         curr_loc = device.get_position()
@@ -399,8 +424,10 @@ class MotorApplication:
         self.deviceYaw.wait_move()
         self.devicePitch.move_to(self.start_loc_pitch)
         self.devicePitch.wait_move()
-        print(self.deviceYaw.get_position())
-        print(self.devicePitch.get_position())
+        loc_yaw = self.deviceYaw.get_position()
+        loc_pitch = self.devicePitch.get_position()
+        print(loc_yaw, loc_yaw*self.step_yaw)
+        print(loc_pitch, loc_pitch*self.step_pitch)
         print("home sweet home")
         time.sleep(2)
         yaw_loc = self.deviceYaw.get_position()
@@ -409,17 +436,17 @@ class MotorApplication:
         self.pitch_locs.append(pitch_loc*self.step_pitch)
         self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
         self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
-        # if self.window_revealed:
-        #     self.main_window.update_plot2(self.yaw_locs, self.pitch_locs)
 
     def keepCentered(self):
         """Currently, run adjustBeams if the signal drops below a specific value, but could constantly adjust the beam."""
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
-            print(newVal, self.deviceYaw.get_position(), self.devicePitch.get_position())
-            # if  newVal < self.currVal*self.deviationVal:
-            self.currVal = self.adjustBeams()
+            if newVal < 0.5*self.initialPeakVal:
+                self.waitForFog()
+            print(newVal, self.deviceYaw.get_position()*self.step_yaw, self.devicePitch.get_position()*self.step_pitch)
+            self.adjustBeams()
+        
 
     def plotField(self, binFactor):
         """ Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray """

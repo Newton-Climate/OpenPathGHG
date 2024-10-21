@@ -112,6 +112,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.finished.connect(self.thread.quit)
             self.worker.finished.connect(self.worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater)
+            self.thread.finished.connect(self.restoreButtons)
 
             self.thread.start()
 
@@ -121,7 +122,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mapField.setEnabled(False)
             self.calibrateDevice.setEnabled(False)
         else:
-            self.restoreButtons()
+            self.keepAligned.setText("Shutting Down Alignment Procedure")
+            self.keepAligned.setEnabled(False)
             self.motorapp.keepingCentered = False
         
     
@@ -234,8 +236,10 @@ if __name__ == '__main__':
     # start_pitch = -97862
     serialNoYaw = "27250209"
     serialNoPitch = "27250140"
-    start_yaw = 218523
-    start_pitch = 241626
+    start_yaw = 218523 #(Lab)
+    start_pitch = 241626 #(Lab)
+    # start_yaw = 21111
+    # start_pitch = -92993
     yawBoundary = 2000
     pitchBoundary = 1000
     deviationVal = 0.1
