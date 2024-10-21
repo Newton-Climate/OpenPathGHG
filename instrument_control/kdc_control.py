@@ -69,8 +69,6 @@ class MotorApplication:
         self.step_pitch = 7.234e-6
         # step_yaw = 8.79e-4
         self.step_yaw = 13.023e-6
-        # 21040
-        # -92643
 
 
         self.deviationVal = deviationVal
@@ -84,7 +82,6 @@ class MotorApplication:
         self.yawBoundary = yawBoundary
         self.pitchBoundary = pitchBoundary
         time.sleep(0.5)
-        # print(self.deviceYaw.get_device_info())
         self.yaw_locs = []
         self.pitch_locs = []
         if not currPeaked:
@@ -112,9 +109,7 @@ class MotorApplication:
         print(f'start index: {self.start_index}')
         self.end_index = int(self.target_index*1.1)
         print(f'end index: {self.end_index}')
-        # self.spectrum = (np.abs(scipy.fft.rfft(buffer))*2/self.total_samples)
         self.freq_range = self.freq_range[self.start_index:self.end_index]
-        # self.spectrum = self.spectrum[self.start_index:self.end_index]
         currVal, _ = self.checkSpectrum()
         self.initialPeakVal = currVal
         self.valBuffer = [(0, 0, 0)]*50
@@ -483,26 +478,3 @@ class MotorApplication:
         self.devicePitch.close()
         scope.close(self.device_data)
         device.close(self.device_data)
-        motor_locs = zip(self.yaw_locs, self.pitch_locs)
-        plt.ioff()
-        with open('out.csv', 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerows(motor_locs)
-        
-
-# if __name__ == '__main__':
-#     with open("loc_coords.txt", "ab") as loc_log:
-#         # serialNoYaw = "27006315"
-#         # serialNoPitch = "27006283"
-#         serialNoYaw = "27250209"
-#         serialNoPitch = "27250140"
-#         yawBoundary = 2000
-#         pitchBoundary = 1000
-#         start_yaw = 218523
-#         start_pitch = 241626
-#         deviationVal = 0.5
-#         binFactor = 50
-
-#         with MotorApplication(serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, yawBoundary=yawBoundary, pitchBoundary=pitchBoundary, deviationVal=deviationVal, startYaw=start_yaw, startPitch=start_pitch, loc_log=loc_log) as m:
-#             print("about to plot field")
-#             m.plotField(binFactor)
