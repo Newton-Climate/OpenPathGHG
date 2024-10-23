@@ -207,12 +207,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
-    # serialNoYaw = "27006315"
-    # serialNoPitch = "27006283"
+    # serialNoYaw = "27006315" # (Field)
+    # serialNoPitch = "27006283" # (Field)
     # start_yaw = -40867
     # start_pitch = -97862
-    serialNoYaw = "27250209"
-    serialNoPitch = "27250140"
+    serialNoYaw = "27250209" # (Lab)
+    serialNoPitch = "27250140" # (Lab)
     start_yaw = 218523  # (Lab)
     start_pitch = 241626  # (Lab)
     # start_yaw = 21111
@@ -222,6 +222,7 @@ if __name__ == "__main__":
     deviationVal = 0.1
     binFactor = 200
     currPeaked = False
+    fogThreshold = 0.5
     with open("data/loc_coords.txt", "a", encoding="utf-8") as loc_log:
         with beam_align.BeamAligner(
             currPeaked=currPeaked,
@@ -233,6 +234,7 @@ if __name__ == "__main__":
             startYaw=start_yaw,
             startPitch=start_pitch,
             loc_log=loc_log,
+            fogThreshold=fogThreshold,
         ) as newbeamaligner:
             app = QtWidgets.QApplication([])
             main = MainWindow(beamaligner=newbeamaligner)

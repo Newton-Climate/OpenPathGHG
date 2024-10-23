@@ -47,6 +47,7 @@ class BeamAligner:
         startYaw,
         startPitch,
         loc_log,
+        fogThreshold,
     ):
         """Initialize a BeamAligner object, along with its motor and scope controller.
 
@@ -61,6 +62,7 @@ class BeamAligner:
             startPitch (int): The initial homed yaw and pitch, reset when recenterHome is called. Note: not the motors' home values.
             loc_log (.txt file): Text file where timestamped motor positions are output after each move. Opened in app.py.
         """
+        self.fogThreshold = fogThreshold
         self.sample_size = 20
         self.binFactorYaw = 1
         self.binFactorPitch = 1
@@ -226,7 +228,7 @@ class BeamAligner:
             deviceName="yaw", sw_kind="ignore"
         )  # Not using limit switches for testing, as they quietly stop the motor when the limit switch is reached, not sure how to tell when that happens.
         self.motor_controller.setupLimitSwitch(deviceName="pitch", sw_kind="ignore")
-        # self.motor_controller.setupLimitSwitch(deviceName="yaw"sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
+        # self.motor_controller.setupLimitSwitch(deviceName="yaw", sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
         # self.motor_controller.setupLimitSwitch(deviceName="pitch", sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
         self.start_loc_yaw = newYaw
         self.start_loc_pitch = newPitch
@@ -292,7 +294,7 @@ class BeamAligner:
         """When fog is detected, this is called. Stop moving until the signal increases, then move to the highest amplitude location in the buffer.
         """        
         currVal = self.checkVal()
-        while currVal < 0.5 * self.initialPeakVal and self.keepingCentered:
+        while currVal < self.fogThreshold * self.initialPeakVal and self.keepingCentered:
             currVal = self.checkVal()
             time.sleep(20)
         self.safeMoveTo(deviceName="yaw", move_loc=self.getMaxBuffer()[1])
@@ -556,7 +558,7 @@ class BeamAligner:
         self.keepingCentered = True
         while self.keepingCentered:
             newVal = self.checkVal()
-            if newVal < 0.5 * self.initialPeakVal:
+            if newVal < self.fogThreshold * self.initialPeakVal:
                 self.waitForFog()
             print(
                 newVal,

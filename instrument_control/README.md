@@ -2,6 +2,8 @@ Software installs:
 https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=10285 Observe and control motors by themselves
 https://digilent.com/shop/software/digilent-waveforms/ Observe scope - spectrum analyzer, select centered at 9 kHz, sometimes set scale to linear instead of dB
 https://github.com/Newton-Climate/OpenPathGHG/tree/main/instrument_control The software, use requirements.txt to set up all pip dependencies, py folder contains other imported dependencies
+Useful: https://pylablib.readthedocs.io/en/latest/.apidoc/pylablib.devices.Thorlabs.html#pylablib.devices.Thorlabs.kinesis.KinesisMotor.get_scale information on Thorlabs device api
+
 
 Physical Setup:
 Attach scope 1+ and 1- to detector poles, then potentially a preamp in between. Digilent USB plugs into computer, along with thorlabs kcube mount.
