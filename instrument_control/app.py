@@ -21,35 +21,35 @@ from PyQt6 import QtCore, QtWidgets
 import threading
 from threading import Thread
 
-import kdc_control
+import beam_align
 
 
 class Worker(QObject):
-    def __init__(self, beamapp):
+    def __init__(self, beamaligner):
         super(Worker, self).__init__()
-        self.beamapp = beamapp
+        self.beamaligner = beamaligner
 
     finished = pyqtSignal()
 
     def keepCentered(self):
-        self.beamapp.keepCentered()
+        self.beamaligner.keepCentered()
         self.finished.emit()
 
     def plotField(self):
-        self.beamapp.plotField(200)
+        self.beamaligner.plotField(200)
         self.finished.emit()
 
     def calibrateSampleBin(self):
-        self.beamapp.calibrateSampleBin()
+        self.beamaligner.calibrateSampleBin()
         self.finished.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    def __init__(self, beamapp):
+    def __init__(self, beamaligner):
         super().__init__()
 
-        self.beamapp = beamapp
+        self.beamaligner = beamaligner
 
         self.setWindowTitle("Laser Feedback Control")
 
@@ -104,7 +104,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.keepAligned.text() == "Keep Beam Aligned":
 
             self.thread = QThread()
-            self.worker = Worker(self.beamapp)
+            self.worker = Worker(self.beamaligner)
             self.worker.moveToThread(self.thread)
 
             self.thread.started.connect(self.worker.keepCentered)
@@ -125,12 +125,12 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.keepAligned.setText("Shutting Down Alignment Procedure")
             self.keepAligned.setEnabled(False)
-            self.beamapp.keepingCentered = False
+            self.beamaligner.keepingCentered = False
 
     def mapFieldClicked(self):
 
         self.thread = QThread()
-        self.worker = Worker(self.beamapp)
+        self.worker = Worker(self.beamaligner)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.plotField)
@@ -152,7 +152,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def calibrateDeviceClicked(self):
 
         self.thread = QThread()
-        self.worker = Worker(self.beamapp)
+        self.worker = Worker(self.beamaligner)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.calibrateSampleBin)
@@ -180,19 +180,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.calibrateDevice.setText("Calibrate Device")
 
     def update_plot1(self):
-        spectrum = self.beamapp.export_spectrum
+        spectrum = self.beamaligner.export_spectrum
         try:
-            self.line1.setData(self.beamapp.freq_range, spectrum)
+            self.line1.setData(self.beamaligner.freq_range, spectrum)
 
         except:
             self.line1 = self.graph1.plot(
-                self.beamapp.freq_range,
+                self.beamaligner.freq_range,
                 spectrum,
             )
 
     def update_plot2(self):
-        yaw_locs = self.beamapp.yaw_locs
-        pitch_locs = self.beamapp.pitch_locs
+        yaw_locs = self.beamaligner.yaw_locs
+        pitch_locs = self.beamaligner.pitch_locs
         try:
             self.line2.setData(yaw_locs, pitch_locs)
             self.dot.setData([yaw_locs[-1]], [pitch_locs[-1]], symbol="o")
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     binFactor = 200
     currPeaked = False
     with open("data/loc_coords.txt", "a", encoding="utf-8") as loc_log:
-        with kdc_control.BeamAligner(
+        with beam_align.BeamAligner(
             currPeaked=currPeaked,
             serialNoYaw=serialNoYaw,
             serialNoPitch=serialNoPitch,
@@ -233,9 +233,9 @@ if __name__ == "__main__":
             startYaw=start_yaw,
             startPitch=start_pitch,
             loc_log=loc_log,
-        ) as newbeamapp:
+        ) as newbeamaligner:
             app = QtWidgets.QApplication([])
-            main = MainWindow(beamapp=newbeamapp)
+            main = MainWindow(beamaligner=newbeamaligner)
             main.show()
-            newbeamapp.windowRevealed(main)
+            newbeamaligner.windowRevealed(main)
             app.exec()

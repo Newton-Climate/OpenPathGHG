@@ -2,7 +2,6 @@
 Many imports
 """
 
-from pylablib.devices import Thorlabs
 import ft232
 import time
 import ctypes
@@ -18,34 +17,14 @@ import app
 import datetime
 from statistics import mean, stdev
 import math
+import copy
 
 import random
 import matplotlib
 from matplotlib import cm
 import time
 
-"""
-Import files from local system
-"""
-dwf = ctypes.cdll.dwf
-
-HERE = Path(__file__).parent
-path.append(str(HERE / "py/"))
-path.append("py")
-# import dwfconstants as constants
-from WF_SDK import device, scope, wavegen, error  # import instruments
-
-modulename = "WF_SDK"
-if modulename not in sys.modules:
-    print(f"You have not imported the {modulename} module")
-
-
-class data:
-    """stores the sampling frequency and the buffer size for Digilent to use"""
-
-    sampling_frequency = 8.192e04
-    buffer_size = 8192
-    total_time = 0.1
+import digilent_scope, thorlabs_motor
 
 
 class BeamAligner:
@@ -94,46 +73,25 @@ class BeamAligner:
         )
 
         """ Initialize motors and move them to manually input beam center."""
-        self.deviceYaw = Thorlabs.KinesisMotor(serialNoYaw)
-        self.devicePitch = Thorlabs.KinesisMotor(serialNoPitch)
-        self.yawBoundary = yawBoundary
-        self.pitchBoundary = pitchBoundary
-        time.sleep(0.5)
-        self.yaw_locs = []
-        self.pitch_locs = []
+        self.motor_controller = thorlabs_motor.Motor(serialNoYaw=serialNoYaw, serialNoPitch=serialNoPitch, step_yaw=self.step_yaw, step_pitch=self.step_pitch)
+
         if not currPeaked:
             self.recenterHome(startYaw, startPitch)
         else:
             self.recenterHome(
-                self.deviceYaw.get_position(), self.devicePitch.get_position()
+                self.motor_controller.getPosition(deviceName="yaw"), self.motor_controller.getPosition(deviceName="pitch")
             )
         print(
-            f"pos: {self.deviceYaw.get_position()}, {self.devicePitch.get_position()}"
+            f"pos: {self.motor_controller.getPosition(deviceName="yaw")}, {self.motor_controller.getPosition(deviceName="pitch")}"
         )
 
-        """ Run digilent """
-        self.device_data = device.open()
-        print("digilent device opened")
-        scope.open(
-            self.device_data,
-            sampling_frequency=8.192e04,
-            buffer_size=8192,
-            amplitude_range=50,
-        )
-        scope.trigger(
-            self.device_data,
-            enable=False,
-            source=scope.trigger_source.analog,
-            channel=1,
-            level=0,
-        )
-        print("scope set up")
-
+        self.scope_controller = digilent_scope.Scope()
+        
         """Get a spectrum, and send it to GUI to display"""
         self.nyq_freq = (
             data.sampling_frequency / 2
         )  # Nyquist frequency determines bounds of FFT
-        buffer = scope.record(self.device_data, channel=1)
+        buffer = self.scope_controller.recordData()
         print(f"recorded, len {len(buffer)}")
         self.total_samples = len(buffer)
         self.freq_range = np.linspace(0, self.nyq_freq, int(self.total_samples / 2) + 1)
@@ -149,8 +107,8 @@ class BeamAligner:
         self.valBuffer = [(0, 0, 0)] * 50
         self.addToValBuffer(
             self.initialPeakVal,
-            self.deviceYaw.get_position(),
-            self.devicePitch.get_position(),
+            self.motor_controller.getPosition(deviceName="yaw"),
+            self.motor_controller.getPosition(deviceName="pitch"),
         )
         print(self.valBuffer)
 
@@ -165,7 +123,7 @@ class BeamAligner:
         # self.calibrateSampleSize()
         self.adjustBeams()
         self.recenterHome(
-            self.deviceYaw.get_position(), self.devicePitch.get_position()
+            self.motor_controller.getPosition(deviceName="yaw"), self.motor_controller.getPosition(deviceName="pitch")
         )
         self.calibrateBinFactor()
         self.adjustBeams()
@@ -188,12 +146,12 @@ class BeamAligner:
         self.binFactorPitch = 1
         hasMovedEnough = False
         currVal = self.checkVal()
-        starting_loc_yaw = self.deviceYaw.get_position()
-        starting_loc_pitch = self.devicePitch.get_position()
+        starting_loc_yaw = self.motor_controller.getPosition(deviceName="yaw")
+        starting_loc_pitch = self.motor_controller.getPosition(deviceName="pitch")
         goingForwardYaw = 1
         print(f"going forward yaw: {goingForwardYaw}")
         while not hasMovedEnough:
-            self.safeMove(self.deviceYaw, goingForwardYaw * self.binFactorYaw)
+            self.motor_controller.safeMove(deviceName="yaw", amount=goingForwardYaw * self.binFactorYaw)
             newVal = self.checkCalibrationVal()
             self.binFactorYaw *= 2
             percent_diff = abs(newVal / currVal - 1)
@@ -201,12 +159,12 @@ class BeamAligner:
             hasMovedEnough = abs(newVal / currVal - 1) > 0.05
         self.binFactorYaw /= 2
         print(f"bin factor yaw: {self.binFactorYaw}")
-        self.safeMoveTo(self.deviceYaw, starting_loc_yaw)
+        self.safeMoveTo(deviceName="yaw", move_loc=starting_loc_yaw)
         hasMovedEnough = False
         goingForwardPitch = 1
         print(f"going forward pitch: {goingForwardPitch}")
         while not hasMovedEnough:
-            self.safeMove(self.devicePitch, goingForwardPitch * self.binFactorPitch)
+            self.motor_controller.safeMove(deviceName="pitch", amount=goingForwardPitch*self.binFactorPitch)
             newVal = self.checkCalibrationVal()
             self.binFactorPitch *= 2
             percent_diff = abs(newVal / currVal - 1)
@@ -214,7 +172,7 @@ class BeamAligner:
             hasMovedEnough = abs(newVal / currVal - 1) > 0.05
         self.binFactorPitch /= 2
         print(f"bin factor pitch: {self.binFactorPitch}")
-        self.safeMoveTo(self.devicePitch, starting_loc_pitch)
+        self.safeMoveTo(deviceName="pitch", move_loc=starting_loc_pitch)
 
     def windowRevealed(self, window):
         """Called from GUI when it is ready to display. No updates will be made until the window is revealed."""
@@ -224,19 +182,17 @@ class BeamAligner:
     def recenterHome(self, newYaw, newPitch):
         """Recenter home and return home."""
 
-        self.deviceYaw.setup_limit_switch(
-            sw_kind="ignore"
-        )  # Not using limit switches for testing, as they quietly stop the motor when the limit switch is reached, not sure how to tell when that happens.
-        self.devicePitch.setup_limit_switch(sw_kind="ignore")
-        # self.deviceYaw.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
-        # self.devicePitch.setup_limit_switch(sw_kind='stop_imm', sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
+        self.motor_controller.setupLimitSwitch(deviceName="yaw", sw_kind="ignore")  # Not using limit switches for testing, as they quietly stop the motor when the limit switch is reached, not sure how to tell when that happens.
+        self.motor_controller.setupLimitSwitch(deviceName="pitch", sw_kind="ignore")
+        # self.motor_controller.setupLimitSwitch(deviceName="yaw"sw_kind='stop_imm', sw_position_cw = self.start_loc_yaw+yawBoundary, sw_position_ccw=self.start_loc_yaw-yawBoundary)
+        # self.motor_controller.setupLimitSwitch(deviceName="pitch", sw_position_cw = self.start_loc_pitch+pitchBoundary, sw_position_ccw=self.start_loc_pitch-pitchBoundary)
         self.start_loc_yaw = newYaw
         self.start_loc_pitch = newPitch
         self.home()
 
     def getSpectrum(self):
         """Get a single spectrum measurement from the digilent, then plot it if the GUI is revealed."""
-        buffer = scope.record(self.device_data, channel=1)
+        buffer = self.scope_controller.recordData()
         self.total_samples = len(buffer)
         spectrum = np.abs(scipy.fft.rfft(buffer)) * 2 / self.total_samples
         self.export_spectrum = spectrum[self.start_index : self.end_index]
@@ -278,39 +234,39 @@ class BeamAligner:
         while currVal < 0.5 * self.initialPeakVal:
             currVal = self.checkVal()
             time.sleep(20)
-        self.safeMoveTo(self.deviceYaw, self.maxLocYaw)
-        self.safeMoveTo(self.devicePitch, self.maxLocPitch)
+        self.safeMoveTo(deviceName="yaw", move_loc=self.maxLocYaw)
+        self.safeMoveTo(deviceName="pitch", move_loc=self.maxLocPitch)
 
     def adjustBeams(self):
         """Call adjustBeam on each of yaw and pitch separately (peak them up)."""
-        yawVal = self.adjustBeam(self.deviceYaw, self.binFactorYaw)
-        pitchVal = self.adjustBeam(self.devicePitch, self.binFactorPitch)
+        self.adjustBeam(deviceName="yaw", startingBinFactor=self.binFactorYaw)
+        self.adjustBeam(deviceName="pitch", startingBinFactor=self.binFactorPitch)
         newVal = self.checkVal()
-        newYaw = self.deviceYaw.get_position()
-        newPitch = self.devicePitch.get_position()
+        newYaw = self.motor_controller.getPosition(deviceName="yaw")
+        newPitch = self.motor_controller.getPosition(deviceName="pitch")
         self.addToValBuffer(newVal, newYaw, newPitch)
         maxVal, maxYaw, maxPitch = self.getMaxBuffer()
-        self.safeMoveTo(self.deviceYaw, maxYaw)
-        self.safeMoveTo(self.devicePitch, maxPitch)
+        self.safeMoveTo(deviceName="yaw", move_loc=maxYaw)
+        self.safeMoveTo(deviceName="pitch", move_loc=maxPitch)
         if self.checkVal() < newVal:
-            self.safeMoveTo(self.deviceYaw, newYaw)
-            self.safeMoveTo(self.devicePitch, newPitch)
+            self.safeMoveTo(deviceName="yaw", move_loc=newYaw)
+            self.safeMoveTo(deviceName="pitch", move_loc=newPitch)
         self.remember_location()
 
-    def adjustBeam(self, device, startingBinFactor):
+    def adjustBeam(self, deviceName, startingBinFactor):
         """Peak up the signal on the selected motor's axis. Algorithm described in Notion."""
-        binFactor = startingBinFactor
-        goingForward = self.findBetterDirection(device, startingBinFactor)
-        max_loc = device.get_position()
+        binFactor = copy.copy(startingBinFactor)
+        goingForward = self.findBetterDirection(deviceName, startingBinFactor)
+        max_loc = self.motor_controller.getPosition(deviceName=deviceName)
         currVal = self.checkVal()
 
         if goingForward != 0:
-            self.safeMove(device, goingForward * binFactor)
+            self.motor_controller.safeMove(deviceName=deviceName, amount=goingForward * binFactor)
             newVal = self.checkVal()
             while newVal >= currVal:
                 currVal = newVal
-                max_loc = device.get_position()
-                self.safeMove(device, goingForward * binFactor)
+                max_loc = self.motor_controller.getPosition(deviceName=deviceName)
+                self.motor_controller.safeMove(deviceName=deviceName, amount=goingForward * binFactor)
                 binFactor *= 2
                 newVal = self.checkVal()
             goingForward *= -1
@@ -318,41 +274,41 @@ class BeamAligner:
             binFactor /= 2
             while binFactor > startingBinFactor:
                 binFactor /= 2
-                self.safeMove(device, goingForward * binFactor)
+                self.motor_controller.safeMove(deviceName=deviceName, amount=goingForward * binFactor)
                 newVal = self.checkVal()
                 goingForward = nextReverse * goingForward
                 if newVal > currVal:
                     currVal = newVal
                     nextReverse = -1
-                    max_loc = device.get_position()
+                    max_loc = self.motor_controller.getPosition(deviceName=deviceName)
                 else:
                     nextReverse = 1
-            self.safeMove(device, binFactor * goingForward)
+            self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor * goingForward)
             newVal = self.checkVal()
             if newVal < currVal:
                 binFactor /= 2
                 goingForward *= nextReverse
-                self.safeMove(device, binFactor * goingForward)
+                self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor * goingForward)
             # Check if we should move back to greatest magnitude position
             newVal = self.checkVal()
             if newVal > currVal:
-                max_loc = device.get_position()
-        self.safeMoveTo(device, max_loc)
+                max_loc = self.motor_controller.getPosition(deviceName=deviceName)
+        self.safeMoveTo(deviceName=deviceName, move_loc= max_loc)
 
-    def findBetterDirection(self, device, binFactor):
+    def findBetterDirection(self, deviceName, binFactor):
         currVal = self.checkVal()
-        self.safeMove(device, binFactor)
+        self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor)
         posVal = self.checkVal()
-        self.safeMove(device, -2 * binFactor)
+        self.motor_controller.safeMove(deviceName=deviceName, amount=-2 * binFactor)
         negVal = self.checkVal()
-        self.safeMove(device, binFactor)
+        self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor)
         if posVal < currVal and negVal < currVal:
             goingForward = 0
         elif posVal > negVal:
             goingForward = 1
         else:
             goingForward = -1
-        self.safeMove(device, binFactor * goingForward)
+        self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor * goingForward)
         currVal = self.checkVal()
         return goingForward
 
@@ -362,23 +318,23 @@ class BeamAligner:
 
         watchYawStart = time.time()
         for i in range(totalIterations):
-            self.safeMove(self.deviceYaw, 1)
+            self.motor_controller.safeMove(deviceName="yaw", amount=1)
         watchYawTotal = time.time() - watchYawStart
         print(f"Avg Yaw Time: {watchYawTotal/totalIterations}")
 
         watchPitchStart = time.time()
         for i in range(totalIterations):
-            self.safeMove(self.devicePitch, 1)
+            self.motor_controller.safeMove(deviceName="pitch", amount=1)
         watchPitchTotal = time.time() - watchPitchStart
         print(f"Avg Pitch Time: {watchPitchTotal/totalIterations}")
 
         watchYawTenStart = time.time()
         for i in range(totalIterations):
-            self.safeMove(self.deviceYaw, 10)
+            self.motor_controller.safeMove(deviceName="yaw", amount=10)
         watchYawTenTotal = time.time() - watchYawTenStart
         print(f"Avg 10x Yaw Time: {watchYawTenTotal/totalIterations}")
 
-    def findBoundaries(self, device, binFactor):
+    def findBoundaries(self, deviceName, binFactor):
         """Before plotting the field, find the boundaries at which the signal drops below a specified value in both yaw and pitch.
         Go to extrema in all 4 directions, and return the number of steps of binFactor length required to get to those extrema.
 
@@ -393,24 +349,24 @@ class BeamAligner:
         newVal = currVal
         offset_max = 0
         offset_min = 0
-        starting_loc = device.get_position()
+        starting_loc = self.motor_controller.getPosition(deviceName=deviceName)
         print(starting_loc, self.start_loc_yaw, self.start_loc_pitch)
         while newVal >= currVal * self.deviationVal:
-            self.safeMove(device, binFactor)
-            print(device.get_position())
+            self.motor_controller.safeMove(deviceName=deviceName, amount=binFactor)
+            print(self.motor_controller.getPosition(deviceName=deviceName))
             time.sleep(0.5)
             newVal = self.checkVal()
             print(f"currval: {currVal}, newval: {newVal}")
             offset_max += 1
-        print(f"started at {starting_loc}, now at {device.get_position()}")
+        print(f"started at {starting_loc}, now at {self.motor_controller.getPosition(deviceName=deviceName)}")
         self.home()
-        print(f"moved back to {device.get_position()}")
+        print(f"moved back to {self.motor_controller.getPosition(deviceName=deviceName)}")
         newVal = self.checkVal()
         print(f"new val: {newVal}")
         currVal = newVal
         while newVal >= currVal * self.deviationVal:
-            self.safeMove(device, -binFactor)
-            print(device.get_position())
+            self.motor_controller.safeMove(deviceName=deviceName, amount=-binFactor)
+            print(self.motor_controller.getPosition(deviceName=deviceName))
             time.sleep(0.5)
             newVal = self.checkVal()
             print(f"currval: {currVal}, newval: {newVal}")
@@ -422,37 +378,28 @@ class BeamAligner:
 
     def getOrientationArray(self, minYaw, maxYaw, minPitch, maxPitch, binFactor):
         """Given yaw and pitch extrema from findBoundaries, step left to right, then top to bottom, graphin amplitude at each point."""
-        self.safeMove(self.deviceYaw, maxYaw)
-        self.safeMove(self.devicePitch, maxPitch)
+        self.motor_controller.safeMove(deviceName="yaw", amount=maxYaw)
+        self.motor_controller.safeMove(deviceName="pitch", amount=maxPitch)
         yawDiff = int((minYaw + maxYaw) / binFactor)
         pitchDiff = int((minPitch + maxPitch) / binFactor)
         amplitude_2d = np.ones((pitchDiff, yawDiff))
         print(maxYaw, maxPitch, minYaw, minPitch)
         for i in range(pitchDiff):
-            self.safeMove(self.devicePitch, -binFactor)
+            self.motor_controller.safeMove(deviceName="pitch", amount=-binFactor)
             for j in range(yawDiff):
-                self.safeMove(self.deviceYaw, -binFactor)
+                self.motor_controller.safeMove(deviceName="yaw", amount=-binFactor)
                 amplitude_2d[i, j] = self.checkVal()
                 print(i, j)
-            self.safeMove(self.deviceYaw, yawDiff * binFactor)
+            self.motor_controller.safeMove(deviceName="yaw", amount=yawDiff * binFactor)
         return amplitude_2d
 
-    def safeMove(self, device, amount, velocity=79475.19421577454):
-        """A move function that also logs locations and displays in the GUI, then waits for the move to complete."""
-        device.move_by(amount)
-        device.wait_move()
-        yaw_loc = self.deviceYaw.get_position()
-        pitch_loc = self.devicePitch.get_position()
-        self.yaw_locs.append(yaw_loc * self.step_yaw)
-        self.pitch_locs.append(pitch_loc * self.step_pitch)
-
-    def safeMoveTo(self, device, move_loc, velocity=79475.19421577454):
-        curr_loc = device.get_position()
-        self.safeMove(device, move_loc - curr_loc, velocity=velocity)
+    def safeMoveTo(self, deviceName, move_loc, velocity=79475.19421577454):
+        curr_loc = self.motor_controller.getPosition(deviceName=deviceName)
+        self.motor_controller.safeMove(deviceName=deviceName, amount=move_loc - curr_loc, velocity=velocity)
 
     def remember_location(self):
-        yaw_loc = self.deviceYaw.get_position()
-        pitch_loc = self.devicePitch.get_position()
+        yaw_loc = self.motor_controller.getPosition(deviceName="yaw")
+        pitch_loc = self.motor_controller.getPosition(deviceName="pitch")
         self.checkVal()
         ct = datetime.datetime.now()
         self.loc_log.write(
@@ -463,25 +410,22 @@ class BeamAligner:
         """Go to some predefined home."""
         print(self.start_loc_yaw)
         print(self.start_loc_pitch)
-        self.deviceYaw.setup_velocity(max_velocity=velocity)
-        self.devicePitch.setup_velocity(max_velocity=velocity)
-        self.deviceYaw.move_to(self.start_loc_yaw)
-        print("moooving")
-        self.deviceYaw.wait_move()
-        self.devicePitch.move_to(self.start_loc_pitch)
-        self.devicePitch.wait_move()
-        loc_yaw = self.deviceYaw.get_position()
-        loc_pitch = self.devicePitch.get_position()
+        self.motor_controller.setupVelocity(deviceName="yaw", max_velocity=velocity)
+        self.motor_controller.setupVelocity(deviceName="pitch", max_velocity=velocity)
+        self.safeMoveTo(deviceName="yaw", move_loc=self.start_loc_yaw)
+        self.safeMoveTo(deviceName="pitch", move_loc=self.start_loc_pitch)
+        loc_yaw = self.motor_controller.getPosition(deviceName="yaw")
+        loc_pitch = self.motor_controller.getPosition(deviceName="pitch")
         print(loc_yaw, loc_yaw * self.step_yaw)
         print(loc_pitch, loc_pitch * self.step_pitch)
         print("home sweet home")
         time.sleep(2)
-        yaw_loc = self.deviceYaw.get_position()
-        pitch_loc = self.devicePitch.get_position()
+        yaw_loc = self.motor_controller.getPosition(deviceName="yaw")
+        pitch_loc = self.motor_controller.getPosition(deviceName="pitch")
         self.yaw_locs.append(yaw_loc * self.step_yaw)
         self.pitch_locs.append(pitch_loc * self.step_pitch)
-        self.deviceYaw.setup_velocity(max_velocity=79475.19421577454)
-        self.devicePitch.setup_velocity(max_velocity=79475.19421577454)
+        self.motor_controller.setupVelocity(deviceName="yaw", max_velocity=79475.19421577454)
+        self.motor_controller.setupVelocity(deviceName="pitch", max_velocity=79475.19421577454)
 
     def keepCentered(self):
         """Currently, run adjustBeams if the signal drops below a specific value, but could constantly adjust the beam."""
@@ -492,25 +436,25 @@ class BeamAligner:
                 self.waitForFog()
             print(
                 newVal,
-                self.deviceYaw.get_position() * self.step_yaw,
-                self.devicePitch.get_position() * self.step_pitch,
+                self.motor_controller.getPosition(deviceName="yaw") * self.step_yaw,
+                self.motor_controller.getPosition(deviceName="pitch") * self.step_pitch,
             )
             self.adjustBeams()
 
     def plotField(self, binFactor):
         """Peak up signal, then plot the field around the peak using findBoundaries and getOrientationArray"""
-        print(self.deviceYaw.get_scale_units())
-        print(self.deviceYaw.get_scale())
-        print(self.devicePitch.get_scale_units())
-        print(self.devicePitch.get_scale())
+        print(self.motor_controller.getScaleUnits(deviceName="yaw"))
+        print(self.motor_controller.getScale(deviceName="yaw"))
+        print(self.motor_controller.getScaleUnits(deviceName="pitch"))
+        print(self.motor_controller.getScale(deviceName="pitch"))
         self.adjustBeams()
-        newHomeYaw = self.deviceYaw.get_position()
-        newHomePitch = self.devicePitch.get_position()
+        newHomeYaw = self.motor_controller.getPosition(deviceName="yaw")
+        newHomePitch = self.motor_controller.getPosition(deviceName="pitch")
         print(f"yaw: {newHomeYaw}, pitch: {newHomePitch}")
         self.recenterHome(newHomeYaw, newHomePitch)
-        minYaw, maxYaw = self.findBoundaries(self.deviceYaw, binFactor)
+        minYaw, maxYaw = self.findBoundaries(deviceName="yaw", binFactor=binFactor)
         print("yaw boundaries found")
-        minPitch, maxPitch = self.findBoundaries(self.devicePitch, binFactor)
+        minPitch, maxPitch = self.findBoundaries(deviceName="pitch", binFactor=binFactor)
         print("pitch boundaries found")
         print(minYaw, maxYaw, minPitch, maxPitch)
         amplitude_2d = self.getOrientationArray(
@@ -535,11 +479,5 @@ class BeamAligner:
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         """Companion to __enter__. Safely shuts down each device whenever program is stopped/BeamAligner is closed."""
-        self.deviceYaw.setup_limit_switch(sw_kind="ignore")
-        self.devicePitch.setup_limit_switch(sw_kind="ignore")
-        self.deviceYaw.stop()
-        self.devicePitch.stop()
-        self.deviceYaw.close()
-        self.devicePitch.close()
-        scope.close(self.device_data)
-        device.close(self.device_data)
+        self.motor_controller.shutDown()
+        self.scope_controller.shutDown()
