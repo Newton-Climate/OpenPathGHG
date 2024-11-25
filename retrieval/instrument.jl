@@ -130,13 +130,12 @@ function generate_fast_sweep(mod_amplitude::Real,
     num_samples::Int;
     phase_shift::Real=0.0)
 
-    # Calculate the number of cycles within half the triangle wave period
-    num_cycles = mod_freq * slow_sweep_period / 2
-    # Generate the time-vector to cover num_cycles * 2π within half the period
-    t = range(0, stop=num_cycles * 2π, length=num_samples)
+    # Generate the time-vector for a full period
+    t = range(0, stop=slow_sweep_period, length=num_samples)
     # Generate the fast sweep using sine function with phase shift
-    fast_sweep = mod_amplitude * sin.(t .+ phase_shift)
-    
+    fast_sweep = mod_amplitude * sin.(2π*mod_freq*t .+ phase_shift)
+    # Plot the results
+
     return fast_sweep
 end
 
@@ -168,7 +167,12 @@ function generate_spectral_grid(instrument::Instrument)
     # slow and fast sweeps 
     # and starting at min_wavenumber
     starting_wavenumber = minimum(instrument.wavenumber_range)
+    
     wavenumber_grid = slow_sweep .+ fast_sweep .+ starting_wavenumber
+    ptest2 = plot(t, wavenumber_grid, label="triangle wave")
+    xlabel!("Time (s)")
+    plot(ptest2, layout=(1,1))
+    savefig("triangle.png")
 
     # Take only the rising portion of the slow sweep
     # to-do: make this an arguement into this method
@@ -195,17 +199,21 @@ Reference points are the current (in miliamps)values at which the wavenumber is 
 # Returns:
 - `wavenumber_range`: Tuple of the min and max wavenumbers
 """
-function calc_wavenumber_range(I1, I2, lambda1, lambda2, current_range)
+function calc_wavelength_range(I1, I2, lambda1, lambda2, current_range)
     # get the min and max current_range
-        min_current = minimum(current_range)
-        max_current = maximum(current_range)
-    # Calculate the slope
-    slope = (lambda2 - lambda1) / (I2 - I1)
+    #     min_current = minimum(current_range)
+    #     max_current = maximum(current_range)
+    # # Calculate the slope
+    # slope = (lambda2 - lambda1) / (I2 - I1)
     
-    # Calculate the start and end wavelengths    
-    lambda_start = slope * (min_current - I2) + lambda2
-    lambda_end = slope * (max_current - I2) + lambda2
-    
+    # # Calculate the start and end wavelengths    
+    # lambda_start = slope * (min_current - I2) + lambda2
+    # lambda_end = slope * (max_current - I2) + lambda2
+    m = 0.0912/8.1838 #nm/mA 
+    # m = 0.0909/8.178 #nm/mA 
+    # 89.48
+    lambda_start = m*(I1-83.99)+1653.728
+    lambda_end = m*(I2-83.99)+1653.728
     # Return the max and min wavenumbers 
     return [lambda_start, lambda_end]
 end
@@ -310,15 +318,15 @@ function simulate_lockin(direct_signal::AbstractArray,
     harmonic::Int)
 
     # create the time vector
-    t = range(0, stop=instrument.slow_sweep_period, length = length(direct_signal))
+    t = range(0, stop=(instrument.slow_sweep_period)/2, length = length(direct_signal))
     # Generate the 2F signal
-     lockin_y = direct_signal .* gain .* sin.(2π * harmonic * instrument.mod_freq .* t)
+    # lockin_y = direct_signal .* gain .* sin.(2π * harmonic * instrument.mod_freq .* t)
      # this may be be needed later for phase-agnostic retrievals
-    # lockin_x = direct_signal .* gain .* cos.(2π * harmonic * instrument.mod_freq .* t)
+    lockin_x = direct_signal .* gain .* cos.(2π * harmonic * instrument.mod_freq .* t)
     # Multiply the direct signal by the 2F signal
     # lockin_signal = sqrt.(lockin_x.^2 + lockin_y.^2)
 
-    return lockin_y
+    return lockin_x
 end
 
 
@@ -326,7 +334,7 @@ function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1
     # Generate the spectral grid
     ν_grid = spectra["CH4"].grid
     instrument_grid = generate_spectral_grid(instrument)
-    
+     
     # Calculate transmission
     transmitance = SpectralFits.calculate_transmission(x, spectra,
     instrument.pathlength, length(ν_grid),
@@ -352,7 +360,7 @@ function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1
     
     # Filter out high-frequency variations to highlight absorption line-shape
     lowpass_filter = design_filter(instrument.sampling_rate, 100.0, 5, "lowpass")
-    lockin_2f_filtered = filt(lowpass_filter, lockin_2f)
+    lockin_2f_filtered = filtfilt(lowpass_filter, lockin_2f)
     
     return lockin_2f_filtered
 end

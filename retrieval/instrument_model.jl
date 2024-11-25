@@ -11,7 +11,8 @@
     # result should be the second derivative of absorption
 
 using vSmartMOM.Absorption, SpectralFits
-using DSP, Waveforms, Polynomials, StatsBase
+using DSP, Waveforms, Polynomials, StatsBase, FFTW
+using Interpolations
 
 """
 struct LaserPower{FT}
@@ -31,7 +32,7 @@ Base.@kwdef struct LaserPower{FT}
     i2::FT
     psi1::FT
     psi2::FT
-    gain::FT
+    min_room::FT
 end
 
 
@@ -73,6 +74,7 @@ Base.@kwdef struct Instrument{FT}
     pathlength::FT
     sampling_rate::FT
     laser_power::LaserPower{FT}
+    gain::FT
 end
 
 
@@ -119,12 +121,13 @@ generate the triangle wave for the slow sweep
 """
 function generate_triangle_wave(peak_value::Real,
     slow_sweep_period::Real, 
-    num_samples::Int)
+    num_samples::Int,
+    t:: StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64})
 
     # Generate the time-vector, which is slow_sweep_period long
     # t is only half a cycle 
     # for sweep of laser
-    t = range(0, stop=slow_sweep_period, length=num_samples)
+    # t = range(0, stop=slow_sweep_period, length=num_samples)
     # Generate the triangle wave using the trianglewave function
     slow_sweep_freq = 1 / slow_sweep_period
     triangle_wave = peak_value * abs.(sawtoothwave.(2π * slow_sweep_freq .* t))
@@ -150,11 +153,12 @@ Uses sine function
 function generate_fast_sweep(mod_amplitude::Real,
     mod_freq::Real,
     slow_sweep_period::Real,
-    num_samples::Int;
+    num_samples::Int,
+    t:: StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64};
     phase_shift::Real=0.0)
 
     # Generate the time-vector to cover num_cycles * 2π within half the period
-    t = range(0, stop=slow_sweep_period, length=num_samples)
+    # t = range(0, stop=slow_sweep_period, length=num_samples)
     # Generate the fast sweep using sine function with phase shift
     fast_sweep = mod_amplitude * sin.(2π * mod_freq .* t .+ phase_shift)
     
@@ -176,14 +180,14 @@ The result is Truncated to the rising part of the slow sweep
 # Returns:
 - `wavenumber_grid`: the wave-number grid
 """
-function generate_spectral_grid(instrument::Instrument)
+function generate_spectral_grid(instrument::Instrument, t:: StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64})
     # Generate the slow sweep with triangle wave
     # amplitude is the max minus min wave-number
     peak_value = instrument.wavenumber_range[2] - instrument.wavenumber_range[1]
-    slow_sweep = generate_triangle_wave(peak_value, instrument.slow_sweep_period, instrument.num_samples)
+    slow_sweep = generate_triangle_wave(peak_value, instrument.slow_sweep_period, instrument.num_samples,t)
 
     # Generate the fast sweep
-    fast_sweep = generate_fast_sweep(instrument.mod_amplitude, instrument.mod_freq, instrument.slow_sweep_period, instrument.num_samples)
+    fast_sweep = generate_fast_sweep(instrument.mod_amplitude, instrument.mod_freq, instrument.slow_sweep_period, instrument.num_samples,t)
 
     # Generate the wave-number grid by adding the 
     # slow and fast sweeps 
@@ -196,32 +200,35 @@ end
 
 
 """
-calculate the max and min wave-numbersbased on the laboratory reference points in the lab data.
+calculate the max and min wave-length based on the laboratory reference points in the lab data.
 Reference points are the current (in miliamps)values at which the wavenumber is known.
 ================================================================
 # Parameters:
 - `I1`: Current at the first reference point
 - `I2`: Current at the second reference point
-- `lambda1`: Wavenumber at the first reference point
-- `lambda2`: Wavenumber at the second reference point
+- `lambda1`: Wavelength at the first reference point
+- `lambda2`: Wavelength at the second reference point
 - `current_range`: Tuple of the min and max current values
 ===============================
 # Returns:
-- `wavenumber_range`: Tuple of the min and max wavenumbers
+- `wavelength_range`: Tuple of the min and max wavelengths
 """
-function calc_wavenumber_range(I1, I2, lambda1, lambda2, current_range)
-    # get the min and max current_range
-        min_current = minimum(current_range)
-        max_current = maximum(current_range)
-    # Calculate the slope
-    slope = (lambda2 - lambda1) / (I2 - I1)
+function calc_wavelength_range(t0, t1, λ_center, t_center)
     
-    # Calculate the start and end wavelengths    
-    lambda_start = slope * (min_current - I2) + lambda2
-    lambda_end = slope * (max_current - I2) + lambda2
-    
-    # Return the max and min wavenumbers 
-    return [lambda_start, lambda_end]
+    m = 0.0912/0.013639 #nm/s
+    # m = 0.0912/7.5295 #nm/mA 
+
+    λ0 = m*(t0-t_center) + λ_center
+    λ1 = m*(t1-t_center) + λ_center
+
+    # m = 0.0909/8.178 #nm/mA 
+    # 89.48
+    # lambda_start = m*(I1-83.99)+1653.738
+    # lambda_end = m*(I2-83.99)+1653.738
+    # lambda_start = m*(I1-83.60)+1653.728
+    # lambda_end = m*(I2-83.60)+1653.728
+    # Return the max and min wavelength 
+    return [λ0, λ1]
 end
 
 
@@ -247,10 +254,14 @@ Modulations in light-intensity are due to modulation of the laser current.
 # Returns:
 - `light_intensity`: intensity of the light over time due to laser modulation
 """
-function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
+function generate_intensity(instrument, I0, i0, i2, psi1, psi2, min_room, t)
     # Calculate the intensity over time
     ω = 2π * instrument.mod_freq
-    light_intensity = I0 * (1 .+ i0 * sin.(ω * t .+ psi1) .+ i2 * sin.(2 * ω * t .+ psi2))
+    @show I0
+    @show i0
+    loss = 1
+    triangle_wave_IM = I0 * abs.(sawtoothwave.(2π * (1/instrument.slow_sweep_period) .* t)) .+ min_room .+i0
+    light_intensity = (triangle_wave_IM  .+ i0 * sin.(ω * t .+ psi1) .+ i2 * sin.(2 * ω * t .+ psi2))/loss
 
     return light_intensity
 end
@@ -258,7 +269,7 @@ end
 
 function generate_intensity(instrument, t)
     laser = instrument.laser_power
-    return generate_intensity(instrument, laser.I0, laser.i0, laser.i2, laser.psi1, laser.psi2, t)
+    return generate_intensity(instrument, laser.I0, laser.i0, laser.i2, laser.psi1, laser.psi2, laser.min_room, t)
 end
 
 """
@@ -309,23 +320,23 @@ end
 
 function apply_filter(signal, filter_obj, mod_freq, mod_period, fs, padding_type="reflective")
     # Calculate padding length: pad enough to cover slow modulation period
-    pad_length = round(Int, fs * mod_period)
+    pad_length = 1*round(Int, fs * mod_period)
 
-    # Apply padding based on the selected type
-    if padding_type == "zero"
-        padded_signal = vcat(zeros(pad_length), signal, zeros(pad_length))
-    elseif padding_type == "reflective"
-        padded_signal = vcat(reverse(signal[1:pad_length]), signal, reverse(signal[end-pad_length+1:end]))
-    elseif padding_type == "replicative"
-        padded_signal = vcat(signal[1:pad_length], signal, signal[end-pad_length+1:end])
-    else
-        error("Unsupported padding type: $padding_type")
-    end
+    # # Apply padding based on the selected type
+    # if padding_type == "zero"
+    #     padded_signal = vcat(zeros(pad_length), signal, zeros(pad_length))
+    # elseif padding_type == "reflective"
+    #     padded_signal = vcat(reverse(signal[1:pad_length]), signal, reverse(signal[end-pad_length+1:end]))
+    # elseif padding_type == "replicative"
+    #     padded_signal = vcat(signal[1:pad_length], signal, signal[end-pad_length+1:end])
+    # else
+    #     error("Unsupported padding type: $padding_type")
+    # end
 
     # Filter the signal
-    filtered_signal = filtfilt(filter_obj, padded_signal)
+    filtered_signal = filtfilt(filter_obj, signal)
     # Remove padding to restore original signal length
-    filtered_signal = filtered_signal[pad_length+1:end-pad_length]
+    # filtered_signal = filtered_signal[pad_length+1:end-pad_length]
 
     return filtered_signal
 end
@@ -341,22 +352,18 @@ simulate the lock-in amplifier
     - `instrument`: The instrument object
     - `gain`: The gain of the lock-in amplifier
     - `harmonic`: The harmonic of the lock-in amplifier
-
+    - 't': time of the full period sweep
     ================================
 
     Returns:
     - `lockin_signal`: The lock-in signal
 """
-function simulate_lockin(direct_signal::AbstractArray,
-    instrument::Instrument,
-    gain::Real,
-    harmonic::Int;
-    lockin_component="y")
+
+function simulate_lockin(direct_signal,instrument,gain,harmonic,t,lockin_component)
 
     # create the time vector
-    t = range(0, stop=instrument.slow_sweep_period, length =instrument.num_samples)
     # Generate the 2F signal
-     lockin_y = direct_signal .* gain .* sin.(2π * harmonic * instrument.mod_freq .* t)
+    lockin_y = direct_signal .* gain .* sin.(2π * harmonic * instrument.mod_freq .* t)
      # this may be be needed later for phase-agnostic retrievals
     lockin_x = direct_signal .* gain .* cos.(2π * harmonic * instrument.mod_freq .* t)
     # Multiply the direct signal by the 2F signal
@@ -364,9 +371,9 @@ function simulate_lockin(direct_signal::AbstractArray,
 
     # return lockin_signal, lockin_x, or lockin_y depending on a flat_region
     if lockin_component == "x"
-        return lockin_x
+        return reverse(lockin_x)
     elseif lockin_component == "y"
-        return lockin_y
+        return reverse(lockin_y)
     elseif lockin_component == "squared"
         return lockin_signal
     else
@@ -376,7 +383,38 @@ function simulate_lockin(direct_signal::AbstractArray,
 end
 
 
-function sim_open_path_instrument(x0, instrument, spectra, inversion_setup)
+function test_apply_instrument(og_grid, spectra, new_grid)
+
+    new_spec = []
+    itp = LinearInterpolation(og_grid, spectra)    
+    for i in new_grid
+        new_spec = push!(new_spec,itp(i))
+    end
+    # new_spec = itp(new_grid)
+
+    return new_spec
+
+end
+
+function run_bandpass_filter(signal, filter_window, modulation_freq, harmonic, sampling_rate, slow_sweep_period)
+    
+    window_left = harmonic * modulation_freq - filter_window
+    window_right = harmonic * modulation_freq + filter_window
+    bandpass_filter = design_filter(sampling_rate, (window_left, window_right), 1, "bandpass")
+    bp_filt_signal = apply_filter(signal, bandpass_filter, modulation_freq, slow_sweep_period, sampling_rate)
+    return bp_filt_signal
+
+end
+
+function run_lowpass_filter(signal, cutoff, modulation_freq, sampling_rate, slow_sweep_period)
+    
+    lowpass_filter = design_filter(sampling_rate, cutoff, 1, "lowpass")   
+    lockin_2f_filtered = apply_filter(signal, lowpass_filter, modulation_freq, slow_sweep_period, sampling_rate)
+
+    return lockin_2f_filtered
+end
+
+function sim_open_path_instrument(x0, instrument, spectra, inversion_setup, measurement)
     x_fields = collect(keys(x0))
 
     function f(x)
@@ -386,8 +424,8 @@ function sim_open_path_instrument(x0, instrument, spectra, inversion_setup)
         
         # Generate the spectral grid
         ν_grid = spectra["CH4"].grid
-        instrument_grid = generate_spectral_grid(instrument)
         t = range(0, stop=instrument.slow_sweep_period, length=instrument.num_samples)
+        instrument_grid = generate_spectral_grid(instrument,t)
 
         # check if we are fitting for pressure and temperature
         p = haskey(x, "pressure") ? x["pressure"] : measurement.pressure
@@ -398,57 +436,178 @@ function sim_open_path_instrument(x0, instrument, spectra, inversion_setup)
         transmitance = SpectralFits.calculate_transmission(x, spectra,
         instrument.pathlength, length(ν_grid),
         p=p, T=T, fit_column=inversion_setup["fit_column"])
-        
         # Interpolate from the spectroscopy model to the instrument grid
         instrument_grid = instrument_grid .+ shift
         transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
         
         # Scale the laser power by the transmitance to get direct signal
         light_intensity = generate_intensity(instrument, t)
-        
+        test_intensity = 
+        βloss = 0.9882
+        gain_room_pd = 4.75e3
+        responsivity_room = 0.95
+
         # Note: add sintolation function for turbulence-induced power fluctuations here.
 
         # scale the transmitance by the laser power
-        direct_signal = light_intensity .* transmitance
-        
-        # Filter the signal and simulate lock-in amplifier
-        # Filter 2-F signal
-        # Keep ±5% margin of 2-F signal
-        harmonic = 2
-        filter_window = 0.05
-        window_left = harmonic * instrument.mod_freq - filter_window
-        window_right = harmonic * instrument.mod_freq + filter_window
-        bandpass_filter = design_filter(instrument.sampling_rate, (window_left, window_right), 1, "bandpass")
-        signal_2f = apply_filter(direct_signal, bandpass_filter, instrument.mod_freq, instrument.slow_sweep_period, instrument.sampling_rate)
-#
-        # Create the 2-F signal from the lock-in amplifier
+        # direct_signal = gain_room_pd .* responsivity_room .* light_intensity .* (1- βloss) .* (reverse(transmitance))
+        direct_signal = light_intensity .* (reverse(transmitance))
 
-        lockin_2f = simulate_lockin(signal_2f, instrument, gain, harmonic)
+        # Filter the signal and simulate lock-in amplifier
+    
+        # define constants
+        harmonic = 2
+        filter_window = 1000.0
+        cutoff = 2000
+        #run simulation through bandpass filter
         
-        # Filter out high-frequency variations to highlight absorption line-shape
-        lowpass_filter = design_filter(instrument.sampling_rate, 100.0, 2, "lowpass")
+        bp_filt_signal = run_bandpass_filter(direct_signal, filter_window, instrument.mod_freq, harmonic, instrument.sampling_rate, instrument.slow_sweep_period)
+
+        #filter for the measured signal process
         
-        lockin_2f_filtered = apply_filter(lockin_2f, lowpass_filter, instrument.mod_freq, instrument.slow_sweep_period, instrument.sampling_rate)
+        # Create the 2-F signal from the lock-in amplifier
+        lockin_2f = simulate_lockin(bp_filt_signal, instrument, 1, harmonic, t, "x")
         
-        # calculate and scale intensity by measurement baseline
+        # Lowpass filter out high-frequency variations to highlight absorption line-shape
+        lockin_2f_filtered = instrument.gain .* run_lowpass_filter(lockin_2f, cutoff, instrument.mod_freq, instrument.sampling_rate, instrument.slow_sweep_period)
+        
+        # calculate and scale intensity by measurement baseline 
         if "shape_parameters" in x_fields
             lockin_2f_filtered = lockin_2f_filtered .+ calc_polynomial_term(inversion_setup["poly_degree"], x["shape_parameters"], length(instrument_grid))
+            # lockin_2f_filtered = lockin_2f_filtered        
         end
 
         if "dc_offset" in x_fields
             lockin_2f_filtered = lockin_2f_filtered .+ x["dc_offset"]
         end
 
-
         # the portion of signal returned is half a period
         # this is to ensure that the rising part of the signal is returned
-        inds = 1:Int(div(length(lockin_2f_filtered), 2))
+        # inds = 1:Int(div(length(t), 2))
+        inds = 1:Int(div(length(t), 2))
+
+        # room = plot(t[inds], og_meas, label = "measurement for comparison")
+        # p_filt= plot(lp_inst_grid[inds], signal_2f[inds], label = "measurement for comparison")
+        # p_direct = plot(t[inds], lockin_2f_filtered[inds], label = "simulation then simulated lockin")
+        # plot!(t_half, lockin_2f_filtered_meas_x, label = "measured simulated lock x")
+        # plot!(t_half, lockin_2f_filtered_meas_y, label = "measured simulated lock y")
+        # plot!(t[inds], inst_grid_test[inds]/10 .- 646.5, label = "sine grid")
+
+        # plot!(t[inds], test[inds], label = "regular 18k sine")
+
+        # p_meas = plot!(t[inds], light_intensity[inds],label="light intesnity")
+        # ylims!(-0.2,0.2)
+
+        # p_filt = plot(t_test,lockin_2f_filtered2, label = "interpolated lockin")
+        # plot!(t[inds],cos_examp[inds], label = "cosine example")
+        # ylims!(-0.1,0.1)
         
+        # xlims!(0.005,0.045)
+        # ylims!(-0.01,0.01)
+        # plot!(p_direct, layout=(1,1), legend=:topright)
+        
+        # savefig("sim_meas2.png")
         return lockin_2f_filtered[inds]
     end
 
     return f
 end
+
+function test_sim_open_path_instrument(x, instrument, spectra, inversion_setup, measurement)
+
+
+    # Generate the spectral grid
+    ν_grid = spectra["CH4"].grid
+    t = range(0, stop=instrument.slow_sweep_period, length=instrument.num_samples)
+    instrument_grid = generate_spectral_grid(instrument,t)
+    inds = 1:Int(div(length(t), 2))
+
+    # check if we are fitting for pressure and temperature
+    p = haskey(x, "pressure") ? x["pressure"] : measurement.pressure
+    T = haskey(x, "temperature") ? x["temperature"] : measurement.temperature
+    shift = haskey(x, "shift") ? x["shift"] : 0.0
+
+    # Calculate transmission
+    transmitance = SpectralFits.calculate_transmission(x, spectra,
+    instrument.pathlength, length(ν_grid),
+    p=p, T=T, fit_column=inversion_setup["fit_column"])
+    # Interpolate from the spectroscopy model to the instrument grid
+    instrument_grid = instrument_grid .+ shift
+    transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
+
+    # Scale the laser power by the transmitance to get direct signal
+    light_intensity = generate_intensity(instrument, t)
+    βloss = 0.9882
+    gain_room_pd = 4.75e3
+    responsivity_room = 0.95
+    ω = 2π * instrument.mod_freq
+    t_half = t[inds]
+    # test_intense = fit  .+ (gain_room_pd .* responsivity_room .* laser_power.i0 .*(1-βloss)) * ((sin.(ω * t_half .+ laser_power.psi1) .+ laser_power.i2 * sin.(2 * ω * t_half .+ laser_power.psi2)))
+    # Note: add sintolation function for turbulence-induced power fluctuations here.
+
+    # scale the transmitance by the laser power
+    direct_signal = light_intensity .* (reverse(transmitance))
+    # direct_signal = gain_room_pd .* responsivity_room .* light_intensity .* (1- βloss) .* (reverse(transmitance))
+    # direct_signal = (reverse(transmitance[inds])).* test_intense
+
+    # Filter the signal and simulate lock-in amplifier
+
+    # define constants
+    harmonic = 2
+    filter_window = 1000.0
+    cutoff = 2000
+    #run simulation through bandpass filter
+
+    bp_filt_signal = run_bandpass_filter(direct_signal, filter_window, instrument.mod_freq, harmonic, instrument.sampling_rate, instrument.slow_sweep_period)
+
+    #filter for the measured signal process
+
+    # Create the 2-F signal from the lock-in amplifier
+    lockin_2f = simulate_lockin(bp_filt_signal, instrument, 1, harmonic, t, "x")
+
+    # Lowpass filter out high-frequency variations to highlight absorption line-shape
+    lockin_2f_filtered = instrument.gain .* run_lowpass_filter(lockin_2f, cutoff, instrument.mod_freq, instrument.sampling_rate, instrument.slow_sweep_period)
+    direct_filt = run_lowpass_filter(direct_signal, 1000, instrument.mod_freq, instrument.sampling_rate, instrument.slow_sweep_period)
+
+    # calculate and scale intensity by measurement baseline 
+    # if "shape_parameters" in x_fields
+    #     lockin_2f_filtered = lockin_2f_filtered .+ calc_polynomial_term(inversion_setup["poly_degree"], x["shape_parameters"], length(instrument_grid))
+    #     # lockin_2f_filtered = lockin_2f_filtered        
+    # end
+
+    # if "dc_offset" in x_fields
+    #     lockin_2f_filtered = lockin_2f_filtered .+ x["dc_offset"]
+    # end
+
+    # the portion of signal returned is half a period
+    # this is to ensure that the rising part of the signal is returned
+    inds = 1:Int(div(length(t), 2))
+
+    # room = plot(t[inds], og_meas, label = "measurement for comparison")
+    # p_filt= plot(lp_inst_grid[inds], signal_2f[inds], label = "measurement for comparison")
+    p_direct = plot(t[inds], lockin_2f_filtered[inds], label = "simulation then simulated lockin")
+    # plot!(t_half, lockin_2f_filtered_meas_x, label = "measured simulated lock x")
+    # plot!(t_half, lockin_2f_filtered_meas_y, label = "measured simulated lock y")
+    # plot!(t[inds], inst_grid_test[inds]/10 .- 646.5, label = "sine grid")
+
+    # plot!(t[inds], test[inds], label = "regular 18k sine")
+
+    # p_meas = plot!(t[inds], light_intensity[inds],label="light intesnity")
+    # ylims!(-0.2,0.2)
+
+    # p_filt = plot(t_test,lockin_2f_filtered2, label = "interpolated lockin")
+    # plot!(t[inds],cos_examp[inds], label = "cosine example")
+    # ylims!(-0.1,0.1)
+
+    # xlims!(0.005,0.045)
+    # ylims!(-0.01,0.01)
+    plot(p_direct, layout=(1,1), legend=:bottomright)
+
+    savefig("sim_meas2.png")
+    return lockin_2f_filtered[inds]
+    end
+
+
 
 
 """

@@ -16,30 +16,30 @@
     # ====
 
     # Load the instrument functions
-include("instrument.jl")
+# include("instrument.jl")
+include("instrument_model.jl")
 # load packages for spectral calculations
 using SpectralFits, vSmartMOM.Absorption
 using Plots, FFTW
 
 ### read spectral parameters
 # Directory and data setup
-datadir = "../../FreqComb/DCS_experiments/spectra/"
+datadir = "C:/Users/crh3673/OpenPathGHG/retrieval/line-lists/"
 ν_grid = 6040:0.005:6050
 CH₄ = get_molecule_info("CH4", joinpath(datadir, "hit08_12CH4.par"), 6, 1, ν_grid)
 CH₄_C13 = get_molecule_info("13CH4", joinpath(datadir, "hit16_13CH4.par"), 6, 2, ν_grid)
 H2O = get_molecule_info("H2O", joinpath(datadir, "hit20_H2O.par"), 1, 1, ν_grid)
 spectra = setup_molecules([CH₄, H2O, CH₄_C13])
-
 ## define the atmospheric measurement conditions
 # pressure (HPa) and temperature (K)
 p, T = 1e3, 290
 # pathlength of laser in cm
-pathlength= 500e2 # path in cm
+pathlength= 6766.0 # path in cm
 # calculate the column density (num molecules per cm^2)
 # in the leight-path
- vcd = SpectralFits.calc_vcd(p, T, pathlength)
+vcd = SpectralFits.calc_vcd(p, T, pathlength)
 
- # define the mole-fraction of the gases
+# define the mole-fraction of the gases
 x = Dict("CH4" => 2000e-9 * vcd,
 "H2O" => 0.0 * vcd,
 "13CH4" => 2000e-9 * vcd)
@@ -58,10 +58,11 @@ x = Dict("CH4" => 2000e-9 * vcd,
 # max and min laser power in sweep
 I_start, I_end = 30.1, 45.1
 # reference current and wavelength from lab measurements
-I1, λ1 = 36.6, 1653.678
-I2, λ2 = 37.6, 1653.707
-# extrapolate the wavenumber range of the instrument from lab reference-points
-λ_start, λ_end= calc_wavenumber_range(I1, I2, λ1, λ2, (I_start, I_end))
+I1, λ1 = 69.11, 1653.678
+I2, λ2 = 96.61, 1653.707
+# extrapolate the wavelength range of the instrument from lab reference-points
+λ_start, λ_end= calc_wavelength_range(I1, I2, λ1, λ2, (I_start, I_end))
+
 # convert nanometers to wave-numbers (1/cm) of lambda_start:lambda_end
 # Note: switch start and stop is intentional
 min_wavenumber = 1e7 / λ_end
@@ -70,14 +71,16 @@ wavenumber_range = (min_wavenumber, max_wavenumber)
 
 ## define laser modulation parameters 
 # convert amplitude of fast-modulation from nanometers to 1/cm
-mod_amplitude = 0.00367 # experimentally derived parameter for fast sweep 
+mod_amplitude =  0.0239/2  # experimentally derived parameter for fast sweep 
 mod_amplitude = convert_amplitude(min_wavenumber, max_wavenumber, mod_amplitude) 
-mod_freq = 10.0e3 # fast sweep in hz
-sampling_rate = 1.0e5 # samples / sec
+mod_freq = 9.0e3 # fast sweep in hz
+sweep_freq = 10 #slow sweep in Hz
+sampling_rate = 100000 # samples / sec
 
 # length of the vector for one full period
-num_samples = 2*250517
-slow_sweep_period = num_samples*2/sampling_rate #sec per measurement sweep 
+# num_samples = 2*250000
+slow_sweep_period = 1/sweep_freq #sec per measurement sweep 
+num_samples = slow_sweep_period*sampling_rate
 tuning_rate = (max_wavenumber - min_wavenumber) / slow_sweep_period
 # the time vector for one full sweep period
 t = range(0, stop=slow_sweep_period, length=num_samples)
@@ -99,8 +102,8 @@ sampling_rate=sampling_rate
 
 ## run the instrument simulation functions
 # test the instrument model
-model_test = sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, 
-# test each function in thei2, psi1, psi2, t)
+model_test = sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1, psi2, t)
+# test each function in the
 
 ## test each function in the model
 # generate the spectral grid
@@ -115,27 +118,29 @@ transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_g
 light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)[1:length(instrument_grid)]
 direct_signal = light_intensity .* transmitance
 
+
 # filter the signal and simulate lock-in amplifier
 # filter 2-F signal
 # keep ±20% margin of 2-F signal
-bandpass_filter = design_filter(sampling_rate, (1.8*instrument.mod_freq, 2.2*instrument.mod_freq), 6, "bandpass")
-signal_2f = filt(bandpass_filter, direct_signal)
+bandpass_filter = design_filter(sampling_rate, (0.8*harmonic*instrument.mod_freq, 1.2*harmonic*instrument.mod_freq), 3, "bandpass")
+signal_2f = filtfilt(bandpass_filter, direct_signal)
 # create the 2-F signal from the lock-in amplifier
 harmonic = 2
-gain = 1.0
+lockin_gain = 40    #dB
+gain = (10^(lockin_gain/20))
 lockin_2f = simulate_lockin(signal_2f, instrument, gain, harmonic)
 # filter out high-frequency variations to highlight absorption line-shape
-lowpass_filter = design_filter(sampling_rate, 100.0, 5, "lowpass")
+lowpass_filter = design_filter(sampling_rate, 1000, 5, "lowpass")
 lockin_2f_filtered = filt(lowpass_filter, lockin_2f)
 
 ## plot the results
 t = t[1:length(instrument_grid)]
-p1 = plot(instrument_grid, signal_2f,
-label="Filtered Direct Signal with 2-F Bandpass")
-p2 = plot(instrument_grid, lockin_2f, label="Lock-in Signal")
+p1 = plot(t, signal_2f,
+label="2-F Bandpass")
+p2 = plot(t, lockin_2f, label="Lock-in Signal")
 ylabel!("Intensity")
-p3 = plot(instrument_grid, lockin_2f_filtered,
-label="Lock-in Signal Filtered by Low-pass")
+p3 = plot(t, lockin_2f_filtered,
+label="Lock-in Signal- Low-pass")
 xlabel!("wave-numbers (1/cm)")
 plot(p1, p2, p3, layout=(3,1))
 title!("Simulated signals")
@@ -147,7 +152,7 @@ f = fftfreq(length(t), sampling_rate)[1:length(t)÷2]
 
 # Calculate the FFT
 fft_signal = fft(direct_signal)[1:length(t)÷2]
-fft_signal_2f = fft(lockin_2f)[1:length(t)÷2]
+fft_signal_2f = fft(signal_2f)[1:length(t)÷2]
 fft_signal_2f_filtered = fft(lockin_2f_filtered)[1:length(t)÷2]
 
 # Plot the results
@@ -158,6 +163,7 @@ p6 = plot(f, abs.(fft_signal_2f_filtered), label="2-F Signal Filtered")
 xlabel!("Frequency (Hz)")
 plot(p4, p5, p6, layout=(3,1))
 xlims!(8e3, 25e3)
+ylims!(0,1)
 savefig("frequency-domain-signal.png")
 
 ## Calculate the power at the 2-F frequency
