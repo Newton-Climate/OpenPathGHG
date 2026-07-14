@@ -1,28 +1,18 @@
-### This script runs the functions to simulate the open-path Instrument
-# including the laser modulation, the slow sweep, the fast sweep,
-# and the lock-in amplifier
-# ====
-## Notes for modeling the instrument measurements
-    # generate the wavenumber grid from fast and slow sweepsd 
-    # generate the intensity modulation of the laser light over time
-    # calculate the absorbance of the laser as a result of gas absorbance
-    # apply band-pass filter to isolate the 2-F signal
-    # simulate the lock-in by multiplying by 2F signal
-    # apply a low-pass filter to isolate the absorption line-shape
-    # result should be the second derivative of absorption
-    # ====
-    # Author: Dr. Newton Nguyen 
-    # All Rights Reserved
-    # ====
+### End-to-end demonstration script for the open-path instrument model.
+#
+# This script:
+# 1) Configures spectroscopy and instrument parameters.
+# 2) Runs the forward instrument simulation.
+# 3) Plots time-domain and frequency-domain diagnostics.
 
-    # Load the instrument functions
+# Load local instrument-model utilities.
 include("instrument.jl")
-# load packages for spectral calculations
+# Load dependencies for spectroscopy and plotting.
 using SpectralFits, vSmartMOM.Absorption
 using Plots, FFTW
 
-### read spectral parameters
-# Directory and data setup
+### Spectroscopy setup
+# Directory and line-list data setup.
 datadir = "../../FreqComb/DCS_experiments/spectra/"
 ν_grid = 6040:0.005:6050
 CH₄ = get_molecule_info("CH4", joinpath(datadir, "hit08_12CH4.par"), 6, 1, ν_grid)
@@ -30,16 +20,15 @@ CH₄_C13 = get_molecule_info("13CH4", joinpath(datadir, "hit16_13CH4.par"), 6, 
 H2O = get_molecule_info("H2O", joinpath(datadir, "hit20_H2O.par"), 1, 1, ν_grid)
 spectra = setup_molecules([CH₄, H2O, CH₄_C13])
 
-## define the atmospheric measurement conditions
-# pressure (HPa) and temperature (K)
+## Atmospheric measurement conditions
+# Pressure (hPa) and temperature (K).
 p, T = 1e3, 290
-# pathlength of laser in cm
+# Laser pathlength in cm.
 pathlength= 500e2 # path in cm
-# calculate the column density (num molecules per cm^2)
-# in the leight-path
- vcd = SpectralFits.calc_vcd(p, T, pathlength)
+# Calculate column density (molecules cm^-2) over the light path.
+vcd = SpectralFits.calc_vcd(p, T, pathlength)
 
- # define the mole-fraction of the gases
+# Define the gas abundances.
 x = Dict("CH4" => 2000e-9 * vcd,
 "H2O" => 0.0 * vcd,
 "13CH4" => 2000e-9 * vcd)
@@ -53,43 +42,42 @@ x = Dict("CH4" => 2000e-9 * vcd,
 # normalize the lockin-in signal to the environmental signal
 # normalized_lockin = normalize_lockin_signal(environmental_rise, lockin_rise)
 
-### Define the instrument parameters
-# laser current in miliamps
-# max and min laser power in sweep
+### Instrument parameterization
+# Laser current range in mA.
 I_start, I_end = 30.1, 45.1
-# reference current and wavelength from lab measurements
+# Reference current and wavelength points from lab characterization.
 I1, λ1 = 36.6, 1653.678
 I2, λ2 = 37.6, 1653.707
-# extrapolate the wavenumber range of the instrument from lab reference-points
+# Extrapolate instrument wavelength endpoints from the reference points.
 λ_start, λ_end= calc_wavenumber_range(I1, I2, λ1, λ2, (I_start, I_end))
-# convert nanometers to wave-numbers (1/cm) of lambda_start:lambda_end
-# Note: switch start and stop is intentional
+# Convert wavelength endpoints (nm) to wavenumber range (cm^-1).
+# Note: start/stop swap is intentional.
 min_wavenumber = 1e7 / λ_end
 max_wavenumber = 1e7 / λ_start
 wavenumber_range = (min_wavenumber, max_wavenumber)
 
-## define laser modulation parameters 
-# convert amplitude of fast-modulation from nanometers to 1/cm
+## Laser modulation parameters
+# Convert fast-modulation amplitude from nm to cm^-1.
 mod_amplitude = 0.00367 # experimentally derived parameter for fast sweep 
 mod_amplitude = convert_amplitude(min_wavenumber, max_wavenumber, mod_amplitude) 
 mod_freq = 10.0e3 # fast sweep in hz
 sampling_rate = 1.0e5 # samples / sec
 
-# length of the vector for one full period
+# Vector length for one full sweep period.
 num_samples = 2*250517
 slow_sweep_period = num_samples*2/sampling_rate #sec per measurement sweep 
 tuning_rate = (max_wavenumber - min_wavenumber) / slow_sweep_period
-# the time vector for one full sweep period
+# Time vector for one full sweep period.
 t = range(0, stop=slow_sweep_period, length=num_samples)
 
-# parameters for modulation of laser light power
+# Laser intensity-modulation parameters.
 I0 = 4.0 # avg laser intensity
 i0 = 0.00005 # amplitude of the linear IM
 i2 = 0 # ignore the nonlinearities for the moment
 psi1 = 0 # ignore phase shift rn
 psi2 = 0 # ignore phase shift rn
 
-# create the instrument object
+# Build instrument configuration.
 instrument = Instrument(wavenumber_range=wavenumber_range, mod_freq=mod_freq,
 mod_amplitude=mod_amplitude, slow_sweep_period=slow_sweep_period,
 num_samples=num_samples, pathlength=pathlength,
@@ -97,38 +85,36 @@ avg_laser_intensity=I0, tuning_rate=tuning_rate,
 sampling_rate=sampling_rate
 )
 
-## run the instrument simulation functions
-# test the instrument model
-model_test = sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, 
-# test each function in thei2, psi1, psi2, t)
+## Run the full simulation
+model_test = sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0,
+    i2, psi1, psi2, t)
 
-## test each function in the model
-# generate the spectral grid
+## Stepwise diagnostics
+# Generate the spectral grid.
 instrument_grid = generate_spectral_grid(instrument)
-# calculate transmission
+# Calculate transmission.
 transmitance = SpectralFits.calculate_transmission(x, spectra,
     instrument.pathlength, length(ν_grid),
     p=p, T=T)
-# interpolate from the spectroscopy model to the instrument grid
+# Interpolate from spectroscopy grid to instrument grid.
 transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
-# scale the laser power by the transmitance to get direct signal
+# Scale laser power by transmission to get direct signal.
 light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)[1:length(instrument_grid)]
 direct_signal = light_intensity .* transmitance
 
-# filter the signal and simulate lock-in amplifier
-# filter 2-F signal
-# keep ±20% margin of 2-F signal
+# Filter and demodulate using the lock-in workflow.
+# Band-pass keeps a +/-20% window around 2f.
 bandpass_filter = design_filter(sampling_rate, (1.8*instrument.mod_freq, 2.2*instrument.mod_freq), 6, "bandpass")
 signal_2f = filt(bandpass_filter, direct_signal)
-# create the 2-F signal from the lock-in amplifier
+# Demodulate at the second harmonic.
 harmonic = 2
 gain = 1.0
 lockin_2f = simulate_lockin(signal_2f, instrument, gain, harmonic)
-# filter out high-frequency variations to highlight absorption line-shape
+# Smooth high-frequency residuals to highlight absorption line-shape.
 lowpass_filter = design_filter(sampling_rate, 100.0, 5, "lowpass")
 lockin_2f_filtered = filt(lowpass_filter, lockin_2f)
 
-## plot the results
+## Plot time-domain results
 t = t[1:length(instrument_grid)]
 p1 = plot(instrument_grid, signal_2f,
 label="Filtered Direct Signal with 2-F Bandpass")
@@ -141,16 +127,16 @@ plot(p1, p2, p3, layout=(3,1))
 title!("Simulated signals")
 savefig("time-domain-signal.png")
 
-### plot this in the frequency domain
-# calculate the frequency domain
+### Plot frequency-domain diagnostics
+# Frequency axis for one-sided FFT.
 f = fftfreq(length(t), sampling_rate)[1:length(t)÷2]
 
-# Calculate the FFT
+# Compute one-sided spectra.
 fft_signal = fft(direct_signal)[1:length(t)÷2]
 fft_signal_2f = fft(lockin_2f)[1:length(t)÷2]
 fft_signal_2f_filtered = fft(lockin_2f_filtered)[1:length(t)÷2]
 
-# Plot the results
+# Plot one-sided amplitude spectra.
 p4 = plot(f, abs.(fft_signal), label="Direct Signal")
 p5 = plot(f, abs.(fft_signal_2f), label="2-F Signal")
 ylabel!("Intensity")
@@ -160,7 +146,7 @@ plot(p4, p5, p6, layout=(3,1))
 xlims!(8e3, 25e3)
 savefig("frequency-domain-signal.png")
 
-## Calculate the power at the 2-F frequency
+## Report power near 2f
 tolerance = 10.0
 target_freq = 2 * instrument.mod_freq
 

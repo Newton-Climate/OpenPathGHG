@@ -1,45 +1,31 @@
-### This module contains the functions to simulate the open-path Instrument
-# including the laser modulation, the slow sweep, the fast sweep, and the lock-in amplifier
+### Utilities for simulating an open-path wavelength-modulation spectroscopy instrument.
 #
-## Notes for modeling the instrument measurements
-    # generate the wavenumber grid from fast and slow sweepsd 
-    # generate the intensity modulation of the laser light over time
-    # calculate the absorbance of the laser as a result of gas absorbance
-    # apply band-pass filter to isolate the 2-F signal
-    # simulate the lock-in by multiplying by 2F signal
-    # apply a low-pass filter to isolate the absorption line-shape
-    # result should be the second derivative of absorption
+# The workflow implemented in this file is:
+# 1) Build the instrument spectral grid from slow and fast sweeps.
+# 2) Apply gas transmission to the laser signal.
+# 3) Isolate the 2f component with a band-pass filter.
+# 4) Demodulate with a lock-in reference.
+# 5) Smooth with a low-pass filter to recover the line-shape.
 
 using vSmartMOM.Absorption, SpectralFits
 using DSP, Waveforms
 
 
 """
-    struct Instrument{FT}
+    Instrument{FT}
 
-Instrument contains the parameters required to perform the simulation of the instrument
-===============================
+Parameter container for the open-path instrument simulation.
 
 # Fields
-
-- `wavenumber_range::Tuple{FT, FT}`: (cm⁻¹) The minimum and maximum wavenumbers.
-- `avg_laser_intensity::FT`: (mW/m²) The average laser intensity.
-- `slow_sweep_period::FT`: (s) The period of the slow sweep.
-- `tuning_rate::FT`: (cm⁻¹/s) The tuning rate of the laser.
-- `mod_amplitude::FT`: (cm⁻¹) The amplitude of the modulation.
-- `mod_freq::FT`: (Hz) The frequency of the modulation.
-- `num_samples::Int`: Number of samples in the modulation.
-- `pathlength::FT`: (cm) The pathlength of the instrument.
-sampling_rate::FT`:`: (Hz) The sampling rate of the instrument
-
-===============================
-
-# Example
-instrument = Instrument(wavenumber_range=wavenumber_range, mod_freq=mod_freq,
-mod_amplitude=mod_amplitude, slow_sweep_period=slow_sweep_period,
-num_samples=num_samples, pathlength=pathlength,
-avg_laser_intensity=I0, tuning_rate=tuning_rate, sampling_rate=sampling_rate
-)
+- `wavenumber_range::Tuple{FT, FT}`: Minimum and maximum wavenumbers (cm^-1).
+- `avg_laser_intensity::FT`: Mean laser intensity.
+- `slow_sweep_period::FT`: Period of the slow sweep (s).
+- `tuning_rate::FT`: Laser tuning rate (cm^-1 s^-1).
+- `mod_amplitude::FT`: Fast modulation amplitude (cm^-1).
+- `mod_freq::FT`: Fast modulation frequency (Hz).
+- `num_samples::Int`: Number of samples per simulated sweep.
+- `pathlength::FT`: Optical pathlength (cm).
+- `sampling_rate::FT`: Acquisition sampling rate (Hz).
 """
 Base.@kwdef struct Instrument{FT}
     wavenumber_range::Tuple{FT, FT}
@@ -55,19 +41,18 @@ end
 
 
 """
-convert the amplitude of the fast modulation from nanometers to wave-numbers (1/cm)
+    convert_amplitude(min_wavenumber, max_wavenumber, amp_mod_nm)
 
-Parameters
-----------
-min_wavenumber: float
-    The minimum wavenumber
-max_wavenumber: float
-amp_mod_nm: float
-    The amplitude of the modulation in nanometers
-===============================
-Returns
-delta_wavenumber : float
-    The amplitude of the modulation in wave-numbers
+Convert a modulation amplitude from nanometers to wavenumber units (cm^-1)
+around the central wavenumber of the scan range.
+
+# Arguments
+- `min_wavenumber::Float64`: Minimum wavenumber (cm^-1).
+- `max_wavenumber::Float64`: Maximum wavenumber (cm^-1).
+- `amp_mod_nm::Float64`: Modulation amplitude in nanometers.
+
+# Returns
+- `delta_wavenumber::Float64`: Modulation amplitude in cm^-1.
 """
 function convert_amplitude(min_wavenumber::Float64,
     max_wavenumber::Float64,
@@ -85,15 +70,17 @@ end
 
 
 """
-generate the triangle wave for the slow sweep
-    ================================
-    Parameters:
-    - `peak_value`: Peak value (or amplitude) of the triangle wave
-    - `slow_sweep_period`: Period of the slow sweep
-    - `num_samples`: Number of samples in the slow sweep
-    ================================
-    Returns:
-    - `triangle_wave`: The triangle wave
+    generate_triangle_wave(peak_value, slow_sweep_period, num_samples)
+
+Generate the slow-sweep triangle waveform used for wavelength scanning.
+
+# Arguments
+- `peak_value::Real`: Triangle-wave peak amplitude in cm^-1.
+- `slow_sweep_period::Real`: Slow-sweep period in seconds (kept for API consistency).
+- `num_samples::Int`: Number of samples.
+
+# Returns
+- `triangle_wave`: Sampled slow-sweep waveform.
 """
 function generate_triangle_wave(peak_value::Real,
     slow_sweep_period::Real, 
@@ -111,18 +98,19 @@ end
 
 
 """
-generate the fast sweep.
-Uses sine function
-    ================================
-    Parameters:
-    - `mod_amplitude`: Amplitude of the fast sweep
-    - `mod_freq`: Frequency of the fast sweep
-    - `slow_sweep_period`: Period of the slow sweep
-    - `num_samples`: Number of samples in the fast sweep
-    - `phase_shift`: Phase shift of the fast sweep
-    ================================
-    Returns:
-    - `fast_sweep`: The fast sweep
+    generate_fast_sweep(mod_amplitude, mod_freq, slow_sweep_period, num_samples; phase_shift=0.0)
+
+Generate the sinusoidal fast modulation waveform.
+
+# Arguments
+- `mod_amplitude::Real`: Fast modulation amplitude in cm^-1.
+- `mod_freq::Real`: Modulation frequency in Hz.
+- `slow_sweep_period::Real`: Slow-sweep period in seconds.
+- `num_samples::Int`: Number of samples.
+- `phase_shift::Real=0.0`: Optional phase offset in radians.
+
+# Returns
+- `fast_sweep`: Sampled fast modulation waveform.
 """
 function generate_fast_sweep(mod_amplitude::Real,
     mod_freq::Real,
@@ -142,18 +130,17 @@ end
 
 
 """
-generate the wave-number (spectral) grid for the instrument.
-This includes slow sweep (triangle wave)
-and slow sweep (sine-wave)
-Then, the two are added to get the wave-number grid
-The result is Truncated to the rising part of the slow sweep
-----> This may depend on the actual measurement duration in the observations
-================================================================
-# Parameters:
-- `instrument`: Instrument object
+    generate_spectral_grid(instrument)
 
-# Returns:
-- `wavenumber_grid`: the wave-number grid
+Generate the instrument wavenumber grid by combining slow and fast sweeps.
+
+The returned grid is truncated to the rising half of the slow sweep.
+
+# Arguments
+- `instrument::Instrument`: Instrument configuration.
+
+# Returns
+- `wavenumber_grid`: Simulated measurement grid in cm^-1.
 """
 function generate_spectral_grid(instrument::Instrument)
     # Generate the slow sweep with triangle wave
@@ -170,9 +157,8 @@ function generate_spectral_grid(instrument::Instrument)
     starting_wavenumber = minimum(instrument.wavenumber_range)
     wavenumber_grid = slow_sweep .+ fast_sweep .+ starting_wavenumber
 
-    # Take only the rising portion of the slow sweep
-    # to-do: make this an arguement into this method
-    # may depend on actual measurement in retrieval
+    # Keep only the rising branch of the sweep.
+    # This could be made configurable if acquisition timing changes.
     idx_max::Int64 = floor(Int, instrument.num_samples / 2)
     # Truncate the grid to the rising part of the slow sweep
     wavenumber_grid = wavenumber_grid[1:idx_max]
@@ -182,18 +168,19 @@ end
 
 
 """
-calculate the max and min wave-numbersbased on the laboratory reference points in the lab data.
-Reference points are the current (in miliamps)values at which the wavenumber is known.
-================================================================
-# Parameters:
-- `I1`: Current at the first reference point
-- `I2`: Current at the second reference point
-- `lambda1`: Wavenumber at the first reference point
-- `lambda2`: Wavenumber at the second reference point
-- `current_range`: Tuple of the min and max current values
-===============================
-# Returns:
-- `wavenumber_range`: Tuple of the min and max wavenumbers
+    calc_wavenumber_range(I1, I2, lambda1, lambda2, current_range)
+
+Estimate scan-endpoint wavenumbers from two current-to-wavenumber reference points.
+
+# Arguments
+- `I1`: Current at the first reference point.
+- `I2`: Current at the second reference point.
+- `lambda1`: Wavenumber at `I1`.
+- `lambda2`: Wavenumber at `I2`.
+- `current_range`: Minimum and maximum operating current.
+
+# Returns
+- A two-element vector `[lambda_start, lambda_end]`.
 """
 function calc_wavenumber_range(I1, I2, lambda1, lambda2, current_range)
     # get the min and max current_range
@@ -212,26 +199,21 @@ end
 
 
 """
-Generate the intensity of the light over time.
-Modulations in light-intensity are due to modulation of the laser current.
+    generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
 
-================================================================
+Generate laser intensity over time from linear and second-harmonic intensity modulation terms.
 
-# Parameters:
-- `I0`: Average laser intensity
-- `i0`: Amplitude of the linear intensity modulation (IM)
-- `i2`: Amplitude of the nonlinear intensity modulation (IM) (ignored for now)
-- `psi1`: Phase shift for linear IM/FM (ignored for now)
-- `psi2`: Phase shift for nonlinear IM/FM (ignored for now)
-- `w`: Angular frequency of the modulation
-- `t`: Time vector
-- `transmitance`: vector of transmitance values
+# Arguments
+- `instrument`: Instrument containing `mod_freq`.
+- `I0`: Mean laser intensity.
+- `i0`: Linear intensity-modulation coefficient.
+- `i2`: Second-harmonic intensity-modulation coefficient.
+- `psi1`: Phase offset of the linear term (rad).
+- `psi2`: Phase offset of the second-harmonic term (rad).
+- `t`: Time vector.
 
-===============================
-
-
-# Returns:
-- `light_intensity`: intensity of the light over time due to laser modulation
+# Returns
+- `light_intensity`: Intensity trace sampled at `t`.
 """
 function generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)
     # Calculate the intensity over time
@@ -243,28 +225,21 @@ end
 
 
 """
-design a signal filter that is flexable enough to be either low-pass or band-pass filter
-the resulting filter can be called as filt(digital_filter, signal)
+    design_filter(sampling_rate, cutoff_freq, filter_order, filter_type)
 
-================================================================
+Construct a Butterworth low-pass or band-pass digital filter.
 
-Parameters
-----------
-sampling_rate: float
-    The sampling rate of the signal
-cutoff_freq: float or Tuple
-the cut-off frequency or frequencies of the filter
-filter_order: int
-    The order of the filter
-filter_type: str
-the type of filter: either lowpass or bandpass
+The returned object is intended for use with `filt(filter, signal)`.
 
-===============================
+# Arguments
+- `sampling_rate::Real`: Sampling rate in Hz.
+- `cutoff_freq::Union{Real, Tuple{Real, Real}}`: Cutoff frequency (low-pass)
+  or `(f_low, f_high)` tuple (band-pass), in Hz.
+- `filter_order::Int`: Butterworth filter order.
+- `filter_type::String`: Either `"lowpass"` or `"bandpass"`.
 
-Returns
--------
-digital_filter: digitalfilter
-    The digital filter object
+# Returns
+- A `digitalfilter` object.
 """
 function design_filter(sampling_rate::Real,
     cutoff_freq::Union{Real, Tuple{Real,Real}},
@@ -289,41 +264,54 @@ end
 
 
 """
-simulate the lock-in amplifier
+    simulate_lockin(direct_signal, instrument, gain, harmonic)
 
-    ================================
+Demodulate a signal with a sine reference at the selected harmonic.
 
-    Parameters:
-    - `direct_signal`: the direct signal
-    - `instrument`: The instrument object
-    - `gain`: The gain of the lock-in amplifier
-    - `harmonic`: The harmonic of the lock-in amplifier
+# Arguments
+- `direct_signal::AbstractArray`: Input time-domain signal.
+- `instrument::Instrument`: Instrument configuration.
+- `gain::Real`: Multiplicative lock-in gain.
+- `harmonic::Int`: Harmonic index of the reference.
 
-    ================================
-
-    Returns:
-    - `lockin_signal`: The lock-in signal
+# Returns
+- `lockin_y`: In-phase-to-sine demodulated component.
 """
 function simulate_lockin(direct_signal::AbstractArray,
     instrument::Instrument,
     gain::Real,
     harmonic::Int)
 
-    # create the time vector
+    # Time axis aligned with the provided signal samples.
     t = range(0, stop=instrument.slow_sweep_period, length = length(direct_signal))
-    # Generate the 2F signal
+    # Multiply by the lock-in reference at the requested harmonic.
      lockin_y = direct_signal .* gain .* sin.(2π * harmonic * instrument.mod_freq .* t)
-     # this may be be needed later for phase-agnostic retrievals
+     # This may be useful later for phase-agnostic retrievals.
     # lockin_x = direct_signal .* gain .* cos.(2π * harmonic * instrument.mod_freq .* t)
-    # Multiply the direct signal by the 2F signal
+    # Optionally combine quadratures as magnitude.
     # lockin_signal = sqrt.(lockin_x.^2 + lockin_y.^2)
 
     return lockin_y
 end
 
 
+"""
+    sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1, psi2, t)
+
+Run the forward instrument simulation for a methane open-path measurement.
+
+Pipeline:
+1) Compute transmission from spectroscopy and pathlength.
+2) Interpolate transmission onto the instrument sampling grid.
+3) Apply laser intensity modulation.
+4) Band-pass filter around 2f and lock-in demodulate.
+5) Low-pass filter the demodulated trace.
+
+# Returns
+- `lockin_2f_filtered`: Simulated 2f-like retrieval signal.
+"""
 function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1, psi2, t)
-    # Generate the spectral grid
+    # Build the instrument grid and compute transmission on the spectroscopy grid.
     ν_grid = spectra["CH4"].grid
     instrument_grid = generate_spectral_grid(instrument)
     
@@ -332,16 +320,15 @@ function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1
     instrument.pathlength, length(ν_grid),
     p=p, T=T)
     
-    # Interpolate from the spectroscopy model to the instrument grid
+    # Map transmission from spectroscopy grid to instrument grid.
     transmitance = SpectralFits.apply_instrument(ν_grid, transmitance, instrument_grid)
     
-    # Scale the laser power by the transmitance to get direct signal
+    # Scale laser power by transmission to produce detector direct signal.
     light_intensity = generate_intensity(instrument, I0, i0, i2, psi1, psi2, t)[1:length(transmitance)]
     direct_signal = light_intensity .* transmitance
     
-    # Filter the signal and simulate lock-in amplifier
-    # Filter 2-F signal
-    # Keep ±20% margin of 2-F signal
+    # Isolate the 2f band, then demodulate with lock-in reference.
+    # Band-pass keeps a +/-20% window around 2f.
     bandpass_filter = design_filter(instrument.sampling_rate, (1.8 * instrument.mod_freq, 2.2 * instrument.mod_freq), 6, "bandpass")
     signal_2f = filt(bandpass_filter, direct_signal)
     
@@ -350,7 +337,7 @@ function sim_open_path_instrument(x, instrument, spectra, p, T, I0, i0, i2, psi1
     gain = 1.0
     lockin_2f = simulate_lockin(signal_2f, instrument, gain, harmonic)
     
-    # Filter out high-frequency variations to highlight absorption line-shape
+    # Low-pass smooths residual high-frequency structure in the demodulated output.
     lowpass_filter = design_filter(instrument.sampling_rate, 100.0, 5, "lowpass")
     lockin_2f_filtered = filt(lowpass_filter, lockin_2f)
     
